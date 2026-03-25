@@ -530,8 +530,6 @@ function App() {
   const movableTokenIds = useMemo(() => {
     if (phase !== 'playing' || !hasRolled || gameOver || isAnimating) return new Set()
     const player = players[currentPlayer]
-    const hasCapture = Boolean(captureCredits[player.id])
-    const hasCapture = Boolean(captureCredits[player.id])
     const rollValue = lastRoll ?? dice
     if (!rollValue) return new Set()
     const hasCapture = Boolean(captureCredits[player.id])
