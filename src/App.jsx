@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import toast, { Toaster } from 'react-hot-toast'
+import { ToastContainer, toast } from 'react-toastify'
+import 'react-toastify/dist/ReactToastify.css'
 import './App.css'
 
 const GRID = 15
@@ -1120,7 +1121,16 @@ function App() {
 
   return (
     <div className={`app ${isTwoPlayer ? 'two-player' : ''}`}>
-      <Toaster position="top-center" />
+      <ToastContainer
+        position="top-center"
+        autoClose={2000}
+        hideProgressBar={false}
+        closeOnClick
+        pauseOnHover
+        toastClassName="toast-card"
+        bodyClassName="toast-body"
+        progressClassName="toast-progress"
+      />
       {showTutorial ? (
         <div className="tutorial-overlay">
           <div className="tutorial-card">
@@ -1660,38 +1670,40 @@ function App() {
                   </button>
                 </div>
               </div>
-              <div className="panel-card chat-panel">
-                <h2>Chat</h2>
-                <div className="chat-window">
-                  {chatMessages.length === 0 ? (
-                    <p className="chat-empty">Say hello to start the chat.</p>
-                  ) : (
-                    chatMessages.map((msg) => (
-                      <div key={msg.id} className="chat-msg">
-                        <div className="chat-meta">
-                          <strong>{msg.name}</strong>
-                          <span>{msg.at}</span>
+              {playMode === 'room' ? (
+                <div className="panel-card chat-panel">
+                  <h2>Chat</h2>
+                  <div className="chat-window">
+                    {chatMessages.length === 0 ? (
+                      <p className="chat-empty">Say hello to start the chat.</p>
+                    ) : (
+                      chatMessages.map((msg) => (
+                        <div key={msg.id} className="chat-msg">
+                          <div className="chat-meta">
+                            <strong>{msg.name}</strong>
+                            <span>{msg.at}</span>
+                          </div>
+                          <div className="chat-text">{msg.text}</div>
                         </div>
-                        <div className="chat-text">{msg.text}</div>
-                      </div>
-                    ))
-                  )}
+                      ))
+                    )}
+                  </div>
+                  <div className="chat-input">
+                    <input
+                      type="text"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      placeholder="Type a message..."
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') sendChat()
+                      }}
+                    />
+                    <button className="btn" onClick={sendChat}>
+                      Send
+                    </button>
+                  </div>
                 </div>
-                <div className="chat-input">
-                  <input
-                    type="text"
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="Type a message..."
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') sendChat()
-                    }}
-                  />
-                  <button className="btn" onClick={sendChat}>
-                    Send
-                  </button>
-                </div>
-              </div>
+              ) : null}
             </aside>
           </main>
         </>
