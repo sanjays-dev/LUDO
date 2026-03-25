@@ -210,6 +210,7 @@ function App() {
   const [capturedInfo, setCapturedInfo] = useState(null)
   const [gameOver, setGameOver] = useState(false)
   const [showTutorial, setShowTutorial] = useState(false)
+  const [captureCredits, setCaptureCredits] = useState({})
   const [chatMessages, setChatMessages] = useState([])
   const [chatInput, setChatInput] = useState('')
   const playersRef = useRef(players)
@@ -529,8 +530,11 @@ function App() {
   const movableTokenIds = useMemo(() => {
     if (phase !== 'playing' || !hasRolled || gameOver || isAnimating) return new Set()
     const player = players[currentPlayer]
+    const hasCapture = Boolean(captureCredits[player.id])
+    const hasCapture = Boolean(captureCredits[player.id])
     const rollValue = lastRoll ?? dice
     if (!rollValue) return new Set()
+    const hasCapture = Boolean(captureCredits[player.id])
     const enemyTrackIndices = new Set()
     players.forEach((p, idx) => {
       if (idx === currentPlayer) return
@@ -547,6 +551,8 @@ function App() {
         return
       }
       if (token.steps >= 0 && token.steps < 58 && token.steps + rollValue <= 58) {
+        const entersHome = token.steps < 52 && token.steps + rollValue >= 52
+        if (entersHome && !hasCapture) return
         if (token.steps < 52) {
           const pathIndices = getTrackIndicesBetween(player.color, token.steps, rollValue)
           const blocked = pathIndices.some((idx) => enemyTrackIndices.has(idx))
@@ -556,7 +562,7 @@ function App() {
       }
     })
     return result
-  }, [players, currentPlayer, hasRolled, dice, lastRoll, gameOver, phase, isAnimating])
+  }, [players, currentPlayer, hasRolled, dice, lastRoll, captureCredits, gameOver, phase, isAnimating])
 
   function toggleColor(color) {
     if (phase !== 'setup') return
@@ -741,6 +747,7 @@ function App() {
     setCurrentPlayer(0)
     setDice(null)
     setLastRoll(null)
+    setCaptureCredits({})
     if (diceClearTimerRef.current) {
       clearTimeout(diceClearTimerRef.current)
       diceClearTimerRef.current = null
@@ -793,6 +800,8 @@ function App() {
     const canMove = player.tokens.some((token) => {
       if (token.steps === -1) return value === 6
       if (token.steps >= 0 && token.steps < 58 && token.steps + value <= 58) {
+        const entersHome = token.steps < 52 && token.steps + value >= 52
+        if (entersHome && !hasCapture) return false
         if (token.steps < 52) {
           const pathIndices = getTrackIndicesBetween(player.color, token.steps, value)
           const blocked = pathIndices.some((idx) => enemyTrackIndices.has(idx))
@@ -857,6 +866,7 @@ function App() {
     setCurrentPlayer(0)
     setDice(null)
     setLastRoll(null)
+    setCaptureCredits({})
     if (diceClearTimerRef.current) {
       clearTimeout(diceClearTimerRef.current)
       diceClearTimerRef.current = null
@@ -956,12 +966,15 @@ function App() {
 
       if (captured.length) {
         const unique = [...new Set(captured)]
-        const names = unique.map((color) => COLOR_NAMES[color]).join(', ')
+        const names = unique
+          .map((color) => playerNames[color] || COLOR_NAMES[color])
+          .join(', ')
         toast.info(`${movedPlayer.name} captured ${names}!`)
         playTone({ frequency: 220, type: 'square', duration: 0.18, volume: 0.12 })
-        setCapturedInfo({ colors: unique, by: movedPlayer.name })
+        setCapturedInfo({ colors: unique, by: movedPlayer.name, victims: names })
         playSfx('capture')
         setTimeout(() => setCapturedInfo(null), 1200)
+        setCaptureCredits((prev) => ({ ...prev, [movedPlayer.id]: true }))
       }
 
       const finishedNow = movedPlayer.tokens.every((t) => t.steps === 58)
@@ -1049,6 +1062,8 @@ function App() {
     const canMove = player.tokens.some((token) => {
       if (token.steps === -1) return value === 6
       if (token.steps >= 0 && token.steps < 58 && token.steps + value <= 58) {
+        const entersHome = token.steps < 52 && token.steps + value >= 52
+        if (entersHome && !hasCapture) return false
         if (token.steps < 52) {
           const pathIndices = getTrackIndicesBetween(player.color, token.steps, value)
           const blocked = pathIndices.some((idx) => enemyTrackIndices.has(idx))
@@ -1149,7 +1164,9 @@ function App() {
               ))}
             </div>
             <h2>Captured!</h2>
-            <p>{capturedInfo.by} sent a coin back to base.</p>
+            <p>
+              {capturedInfo.by} captured {capturedInfo.victims}.
+            </p>
           </div>
         </div>
       ) : null}
@@ -1505,10 +1522,26 @@ function App() {
           <div className="setup-card tip-card">
             <h2>How to Play</h2>
             <ul>
+              <li>Play with 2, 3, or 4 players.</li>
               <li>Roll a 6 to leave base.</li>
               <li>Landing on an enemy sends it back (except safe starts).</li>
+              <li>You cannot jump over an enemy coin.</li>
+              <li>Capture at least one coin before entering the home path.</li>
               <li>Rolling a 6 gives an extra roll.</li>
               <li>Choose mode lets you pick the move number.</li>
+              <li>In room mode, 4 players can start with 3 and a bot joins.</li>
+            </ul>
+          </div>
+          <div className="setup-card rules-card">
+            <h2>Rules Summary</h2>
+            <ul>
+              <li>Only the selected player count can join a room.</li>
+              <li>Players pick their own color in room mode.</li>
+              <li>Player names are editable only by that player.</li>
+              <li>Captured coins return to base.</li>
+              <li>No jumping over enemy coins on the track.</li>
+              <li>Capture required before entering home path.</li>
+              <li>Extra turn on rolling a 6.</li>
             </ul>
           </div>
         </div>
