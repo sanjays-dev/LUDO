@@ -1,0 +1,23 @@
+@import url('https://fonts.googleapis.com/css2?family=Rubik:wght@400;600;800&display=swap');
+
+:root {
+  color-scheme: light;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Rubik', system-ui, -apple-system, sans-serif;
+  background: radial-gradient(circle at top, #fef9e7 0%, #f8f1df 45%, #efe4cc 100%);
+  color: #2c2c2c;
+}
+
+button {
+  font-family: inherit;
+}
