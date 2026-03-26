@@ -1,16 +1,17 @@
-# React + Vite
+🎮 Multiplayer Ludo
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A fun and interactive Ludo game where you can play with your friends in real time. Built to feel smooth, simple, and enjoyable.
 
-Currently, two official plugins are available:
+🚀 Features
+Real-time multiplayer with friends
+Smooth turn-based gameplay
+Clean and easy-to-use UI
+Sound effects for better experience 🎲
+Fair gameplay with basic rules
+💡 What Makes It Cool
+Feels like a real board game experience
+Multiplayer works smoothly without confusion
+Small details like sounds make it more engaging
+✅ Status
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Fully completed and working. You can join, play, and enjoy the full multiplayer experience.
