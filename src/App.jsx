@@ -256,7 +256,7 @@ function App() {
   }, [gameOver])
 
   useEffect(() => {
-    setSelectedColors((prev) => 
+    setSelectedColors((prev) => {
       const filtered = COLOR_ORDER.filter(
         (color) => prev.includes(color) && availableColors.includes(color)
       )
