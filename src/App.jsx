@@ -256,7 +256,7 @@ function App() {
   }, [gameOver])
 
   useEffect(() => {
-    setSelectedColors((prev) => {
+    setSelectedColors((prev) => 
       const filtered = COLOR_ORDER.filter(
         (color) => prev.includes(color) && availableColors.includes(color)
       )
@@ -357,7 +357,7 @@ function App() {
       // ignore
     }
   }, [roomCode, playMode, phase])
-  
+
 
   useEffect(() => {
     if (!roomCode || playMode !== 'room' || phase !== 'playing') return
