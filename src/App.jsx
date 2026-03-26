@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ToastContainer, toast } from 'react-toastify'
-import 'react-toastify/dist/ReactToastify.css'
+import 'react-toastify/ReactToastify.css'
 import './App.css'
 
 const GRID = 15
@@ -357,6 +357,7 @@ function App() {
       // ignore
     }
   }, [roomCode, playMode, phase])
+  
 
   useEffect(() => {
     if (!roomCode || playMode !== 'room' || phase !== 'playing') return
