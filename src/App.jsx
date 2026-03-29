@@ -640,6 +640,7 @@ function App() {
     const stored = localStorage.getItem(`ludo_room_${incoming}`)
     if (!stored) {
       toast.error('Room not found. Check the code and try again.')
+      toast.info('Rooms only sync in the same browser/device for now.')
       setJoinStatus('error')
       playSfx('error')
       return
@@ -1347,7 +1348,11 @@ function App() {
                       type="text"
                       value={joinCode}
                       onChange={(e) => {
-                        setJoinCode(e.target.value)
+                        const cleaned = e.target.value
+                          .toUpperCase()
+                          .replace(/[^A-Z0-9]/g, '')
+                          .slice(0, 6)
+                        setJoinCode(cleaned)
                         setJoinStatus('idle')
                       }}
                       placeholder="Enter code"
