@@ -15,3 +15,20 @@ Small details like sounds make it more engaging
 ✅ Status
 
 Fully completed and working. You can join, play, and enjoy the full multiplayer experience.
+
+Run locally:
+1. `npm install`
+2. Create a Firebase project and enable Realtime Database.
+3. Add a `.env` file with:
+   `VITE_FIREBASE_API_KEY`
+   `VITE_FIREBASE_AUTH_DOMAIN`
+   `VITE_FIREBASE_DATABASE_URL`
+   `VITE_FIREBASE_PROJECT_ID`
+   `VITE_FIREBASE_STORAGE_BUCKET`
+   `VITE_FIREBASE_MESSAGING_SENDER_ID`
+   `VITE_FIREBASE_APP_ID`
+4. `npm run dev`
+
+Deploy on Vercel:
+1. Add the same `VITE_FIREBASE_*` env vars in Vercel.
+2. Deploy. Everyone can play from the same Vercel link.

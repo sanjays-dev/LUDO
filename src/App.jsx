@@ -1,4 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { initializeApp } from 'firebase/app'
+import {
+  getDatabase,
+  get,
+  onDisconnect,
+  onValue,
+  push,
+  ref,
+  remove,
+  runTransaction,
+  update,
+} from 'firebase/database'
 import { ToastContainer, toast } from 'react-toastify'
 import 'react-toastify/ReactToastify.css'
 import './App.css'
@@ -139,6 +151,34 @@ const COLOR_NAMES = {
   red: 'Red',
 }
 
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+}
+
+const firebaseEnabled =
+  Boolean(firebaseConfig.apiKey) &&
+  Boolean(firebaseConfig.databaseURL) &&
+  Boolean(firebaseConfig.projectId)
+
+const firebaseApp = firebaseEnabled ? initializeApp(firebaseConfig) : null
+const db = firebaseEnabled ? getDatabase(firebaseApp) : null
+
+function getClientId() {
+  const key = 'ludo_client_id'
+  let id = localStorage.getItem(key)
+  if (!id) {
+    id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    localStorage.setItem(key, id)
+  }
+  return id
+}
+
 function createPlayers(colors = COLOR_ORDER, namesByColor = {}, botByColor = {}) {
   return colors.map((color) => ({
     id: color,
@@ -221,6 +261,9 @@ function App() {
   const gameOverRef = useRef(gameOver)
   const diceVisibleUntilRef = useRef(0)
   const diceClearTimerRef = useRef(null)
+  const roomCreatedRef = useRef(false)
+  const lastSentNameRef = useRef('')
+  const clientIdRef = useRef(getClientId())
 
   const activeColors = useMemo(() => {
     return COLOR_ORDER.filter((color) => selectedColors.includes(color))
@@ -278,112 +321,112 @@ function App() {
   }, [activeColors])
 
   useEffect(() => {
-    if (playMode !== 'room' || !roomCode || !myColor) return
-    const currentName = playerNames[myColor]
-    if (!currentName) return
-    try {
-      const stored = localStorage.getItem(`ludo_room_${roomCode}`)
-      if (!stored) return
-      const parsed = JSON.parse(stored)
-      localStorage.setItem(
-        `ludo_room_${roomCode}`,
-        JSON.stringify({
-          ...parsed,
-          namesByColor: {
-            ...(parsed.namesByColor || {}),
-            [myColor]: currentName,
-          },
-        })
-      )
-    } catch (err) {
-      // ignore
+    lastSentNameRef.current = ''
+  }, [myColor, roomCode])
+
+  useEffect(() => {
+    if (playMode !== 'room') {
+      roomCreatedRef.current = false
+      return
     }
-  }, [playerNames, playMode, roomCode, myColor])
+    if (!db || !roomCode) return
+    const roomRef = ref(db, `rooms/${roomCode}`)
+    const unsubscribe = onValue(roomRef, (snapshot) => {
+      const room = snapshot.val()
+      if (!room) return
+      const count = room.playerCount || 2
+      setPlayerCount(count)
+      const participants = room.participants || {}
+      const colors = Object.values(participants)
+        .map((p) => p?.color)
+        .filter(Boolean)
+      setColorsTaken(colors)
+      setJoinedPlayers(Math.min(colors.length, count))
+      const names = {}
+      Object.values(participants).forEach((p) => {
+        if (p?.color && p?.name) names[p.color] = p.name
+      })
+      if (Object.keys(names).length) {
+        setPlayerNames((prev) => ({ ...prev, ...names }))
+      }
+    })
+    return () => unsubscribe()
+  }, [playMode, roomCode, db])
 
   useEffect(() => {
     if (playMode !== 'room' || setupStep !== 'create' || !roomCode) return
-    try {
-      const taken = myColor ? [myColor] : []
-      localStorage.setItem(
-        `ludo_room_${roomCode}`,
-        JSON.stringify({
-          playerCount,
-          joinedPlayers: taken.length || joinedPlayers,
-          colorsTaken: taken,
-          namesByColor: myColor && myName ? { [myColor]: myName } : {},
-          createdAt: Date.now(),
-        })
+    if (!firebaseEnabled || !db) {
+      toast.error('Firebase is not configured yet.')
+      return
+    }
+    if (roomCreatedRef.current) return
+    const clientId = clientIdRef.current
+    const name = myName || 'Player 1'
+    const color = myColor || 'green'
+    const roomRef = ref(db, `rooms/${roomCode}`)
+    runTransaction(roomRef, (current) => {
+      if (current) return
+      return {
+        playerCount,
+        createdAt: Date.now(),
+        participants: {
+          [clientId]: {
+            color,
+            name,
+            joinedAt: Date.now(),
+          },
+        },
+      }
+    })
+      .then((result) => {
+        if (!result.committed) {
+          toast.error('Room already exists. Generate a new code.')
+          playSfx('error')
+          return
+        }
+        roomCreatedRef.current = true
+        setJoinStatus('success')
+        setColorsTaken([color])
+        setJoinedPlayers(1)
+        onDisconnect(ref(db, `rooms/${roomCode}/participants/${clientId}`)).remove()
+      })
+      .catch(() => {
+        toast.error('Unable to create room.')
+        playSfx('error')
+      })
+  }, [playMode, setupStep, roomCode, playerCount, myColor, myName, db])
+
+  useEffect(() => {
+    if (playMode !== 'room' || setupStep !== 'create' || !roomCode || !db) return
+    if (!roomCreatedRef.current) return
+    update(ref(db, `rooms/${roomCode}`), { playerCount })
+  }, [playerCount, playMode, setupStep, roomCode, db])
+
+  useEffect(() => {
+    if (playMode !== 'room' || !roomCode || !myColor || !db) return
+    const nextName = (playerNames[myColor] || myName || '').trim()
+    if (!nextName || nextName === lastSentNameRef.current) return
+    lastSentNameRef.current = nextName
+    const clientId = clientIdRef.current
+    update(ref(db, `rooms/${roomCode}/participants/${clientId}`), {
+      color: myColor,
+      name: nextName,
+      joinedAt: Date.now(),
+    })
+  }, [playerNames, myName, myColor, roomCode, playMode, db])
+
+  useEffect(() => {
+    if (!roomCode || playMode !== 'room' || phase !== 'playing' || !db) return
+    const chatRef = ref(db, `rooms/${roomCode}/chat`)
+    const unsubscribe = onValue(chatRef, (snapshot) => {
+      const raw = snapshot.val() || {}
+      const messages = Object.values(raw).sort(
+        (a, b) => (a?.createdAt || 0) - (b?.createdAt || 0)
       )
-      setColorsTaken(taken)
-    } catch (err) {
-      // Storage is optional; ignore if blocked.
-    }
-  }, [playMode, setupStep, roomCode, playerCount, joinedPlayers, myColor, myName])
-
-  useEffect(() => {
-    if (!roomCode || playMode !== 'room') return
-    function handleStorage(e) {
-      if (e.key !== `ludo_room_${roomCode}` || !e.newValue) return
-      try {
-        const data = JSON.parse(e.newValue)
-        if (data?.joinedPlayers) {
-          setJoinedPlayers(Math.min(data.joinedPlayers, data.playerCount || playerCount))
-        }
-        if (Array.isArray(data?.colorsTaken)) {
-          setColorsTaken(data.colorsTaken)
-        }
-        if (data?.namesByColor) {
-          setPlayerNames((prev) => ({ ...prev, ...data.namesByColor }))
-        }
-      } catch (err) {
-        // ignore
-      }
-    }
-    window.addEventListener('storage', handleStorage)
-    return () => window.removeEventListener('storage', handleStorage)
-  }, [roomCode, playMode, playerCount])
-
-  useEffect(() => {
-    if (!roomCode || playMode !== 'room' || phase !== 'playing') return
-    try {
-      const stored = localStorage.getItem(`ludo_chat_${roomCode}`)
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        if (Array.isArray(parsed)) {
-          setChatMessages(parsed)
-        }
-      }
-    } catch (err) {
-      // ignore
-    }
-  }, [roomCode, playMode, phase])
-
-
-  useEffect(() => {
-    if (!roomCode || playMode !== 'room' || phase !== 'playing') return
-    try {
-      localStorage.setItem(`ludo_chat_${roomCode}`, JSON.stringify(chatMessages))
-    } catch (err) {
-      // ignore
-    }
-  }, [chatMessages, roomCode, playMode, phase])
-
-  useEffect(() => {
-    if (!roomCode || playMode !== 'room' || phase !== 'playing') return
-    function handleChatStorage(e) {
-      if (e.key !== `ludo_chat_${roomCode}` || !e.newValue) return
-      try {
-        const parsed = JSON.parse(e.newValue)
-        if (Array.isArray(parsed)) {
-          setChatMessages(parsed)
-        }
-      } catch (err) {
-        // ignore
-      }
-    }
-    window.addEventListener('storage', handleChatStorage)
-    return () => window.removeEventListener('storage', handleChatStorage)
-  }, [roomCode, playMode, phase])
+      setChatMessages(messages)
+    })
+    return () => unsubscribe()
+  }, [roomCode, playMode, phase, db])
 
   function playTone({ frequency = 440, duration = 0.12, type = 'sine', volume = 0.15 }) {
     try {
@@ -454,6 +497,18 @@ function App() {
   function sendChat() {
     const text = chatInput.trim()
     if (!text) return
+    if (playMode === 'room' && roomCode && db) {
+      const msg = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: current?.name || myName || 'Player',
+        text,
+        at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        createdAt: Date.now(),
+      }
+      push(ref(db, `rooms/${roomCode}/chat`), msg)
+      setChatInput('')
+      return
+    }
     setChatMessages((prev) => [
       ...prev,
       {
@@ -602,31 +657,20 @@ function App() {
     }
     if (mode === 'room') {
       const code = generateRoomCode()
+      const name = 'Player 1'
       setPlayMode('room')
       setRoomCode(code)
       setJoinedPlayers(1)
       setColorsTaken(['green'])
       setMyColor('green')
-      setMyName('Player 1')
-      try {
-        localStorage.setItem(
-          `ludo_room_${code}`,
-          JSON.stringify({
-            playerCount,
-            joinedPlayers: 1,
-            colorsTaken: ['green'],
-            namesByColor: { green: 'Player 1' },
-            createdAt: Date.now(),
-          })
-        )
-      } catch (err) {
-        // Storage is optional; ignore if blocked.
-      }
+      setMyName(name)
+      lastSentNameRef.current = ''
+      roomCreatedRef.current = false
       setSetupStep('create')
     }
   }
 
-  function handleJoinRoom() {
+  async function handleJoinRoom() {
     if (!joinCode.trim()) {
       toast.error('Enter a room code to join.')
       return
@@ -637,71 +681,86 @@ function App() {
       setJoinStatus('error')
       return
     }
-    const stored = localStorage.getItem(`ludo_room_${incoming}`)
-    if (!stored) {
+    if (!firebaseEnabled || !db) {
+      toast.error('Firebase is not configured yet.')
+      setJoinStatus('error')
+      return
+    }
+    setJoinStatus('loading')
+    const roomRef = ref(db, `rooms/${incoming}`)
+    const snapshot = await get(roomRef)
+    if (!snapshot.exists()) {
       toast.error('Room not found. Check the code and try again.')
-      toast.info('Rooms only sync in the same browser/device for now.')
       setJoinStatus('error')
       playSfx('error')
       return
     }
-    setJoinStatus('loading')
-    setTimeout(() => {
-      let parsed = null
-      try {
-        parsed = JSON.parse(stored)
-      } catch (err) {
-        parsed = null
-      }
-      if (!parsed || !parsed.playerCount) {
-        setJoinStatus('error')
-        toast.error('Room data is corrupted. Try again.')
-        playSfx('error')
-        return
-      }
-      const taken = Array.isArray(parsed.colorsTaken) ? parsed.colorsTaken : []
-      if (taken.includes(myColor)) {
-        setJoinStatus('error')
-        toast.error('That color is already taken.')
-        playSfx('error')
-        return
-      }
-      const nextTaken = [...taken, myColor]
-      const nextJoined = Math.min(nextTaken.length, parsed.playerCount)
-      try {
-        localStorage.setItem(
-          `ludo_room_${incoming}`,
-          JSON.stringify({
-            playerCount: parsed.playerCount,
-            joinedPlayers: nextJoined,
-            colorsTaken: nextTaken,
-            namesByColor: {
-              ...(parsed.namesByColor || {}),
-              [myColor]: myName || `Player ${nextJoined}`,
-            },
-            createdAt: parsed.createdAt || Date.now(),
-          })
-        )
-      } catch (err) {
-        // ignore
-      }
-      setRoomCode(incoming)
-      setPlayerCount(parsed.playerCount)
-      setJoinedPlayers(nextJoined)
-      setColorsTaken(nextTaken)
-      setPlayerNames((prev) => ({
-        ...prev,
-        ...(parsed.namesByColor || {}),
-        [myColor]: myName || `Player ${nextJoined}`,
-      }))
-      setJoinStatus('success')
-      toast.success('Room joined!')
-      playSfx('join')
-      setSetupStep('settings')
-    }, 1100)
+    const current = snapshot.val() || {}
+    const participants = current.participants || {}
+    const colors = Object.values(participants)
+      .map((p) => p?.color)
+      .filter(Boolean)
+    if (colors.includes(myColor)) {
+      setJoinStatus('error')
+      toast.error('That color is already taken.')
+      playSfx('error')
+      return
+    }
+    if (colors.length >= (current.playerCount || 2)) {
+      setJoinStatus('error')
+      toast.error('Room is full.')
+      playSfx('error')
+      return
+    }
+    const clientId = clientIdRef.current
+    const name = myName || `Player ${colors.length + 1}`
+    const joinResult = await runTransaction(roomRef, (room) => {
+      if (!room) return
+      const nextParticipants = room.participants || {}
+      const taken = Object.values(nextParticipants)
+        .map((p) => p?.color)
+        .filter(Boolean)
+      if (taken.includes(myColor)) return
+      if (taken.length >= (room.playerCount || 2)) return
+      nextParticipants[clientId] = { color: myColor, name, joinedAt: Date.now() }
+      return { ...room, participants: nextParticipants }
+    })
+    if (!joinResult.committed) {
+      setJoinStatus('error')
+      toast.error('Unable to join room. Try again.')
+      playSfx('error')
+      return
+    }
+    onDisconnect(ref(db, `rooms/${incoming}/participants/${clientId}`)).remove()
+    setRoomCode(incoming)
+    const joinedRoom = joinResult.snapshot.val() || {}
+    const joinedParticipants = joinedRoom.participants || {}
+    const joinedColors = Object.values(joinedParticipants)
+      .map((p) => p?.color)
+      .filter(Boolean)
+    setPlayerCount(joinedRoom.playerCount || playerCount)
+    setJoinedPlayers(Math.min(joinedColors.length, joinedRoom.playerCount || playerCount))
+    setColorsTaken(joinedColors)
+    const nameMap = {}
+    Object.values(joinedParticipants).forEach((p) => {
+      if (p?.color && p?.name) nameMap[p.color] = p.name
+    })
+    if (Object.keys(nameMap).length) {
+      setPlayerNames((prev) => ({ ...prev, ...nameMap }))
+    }
+    lastSentNameRef.current = ''
+    setJoinStatus('success')
+    toast.success('Room joined!')
+    playSfx('join')
+    setSetupStep('settings')
   }
 
   function handleBackToMode() {
+    if (playMode === 'room' && roomCode && myColor && db) {
+      const clientId = clientIdRef.current
+      remove(ref(db, `rooms/${roomCode}/participants/${clientId}`))
+    }
+    roomCreatedRef.current = false
     setPlayMode(null)
     setSetupStep('mode')
     setJoinStatus('idle')
@@ -712,6 +771,11 @@ function App() {
   }
 
   function handleBackToSetup() {
+    if (playMode === 'room' && roomCode && myColor && db) {
+      const clientId = clientIdRef.current
+      remove(ref(db, `rooms/${roomCode}/participants/${clientId}`))
+    }
+    roomCreatedRef.current = false
     setPhase('setup')
     setSetupStep('mode')
     setPlayMode(null)
@@ -1249,14 +1313,8 @@ function App() {
                       const code = generateRoomCode()
                       setRoomCode(code)
                       setJoinedPlayers(1)
-                      try {
-                        localStorage.setItem(
-                          `ludo_room_${code}`,
-                          JSON.stringify({ playerCount, joinedPlayers: 1, createdAt: Date.now() })
-                        )
-                      } catch (err) {
-                        // Storage is optional; ignore if blocked.
-                      }
+                      setColorsTaken(myColor ? [myColor] : [])
+                      roomCreatedRef.current = false
                       toast.success('New room code generated.')
                     }}
                   >
@@ -1295,27 +1353,6 @@ function App() {
                   <span>
                     Players joined: {Math.min(joinedPlayers, playerCount)}/{playerCount}
                   </span>
-                  <button
-                    className="btn ghost small"
-                    onClick={() => {
-                      const nextJoined = Math.min(joinedPlayers + 1, playerCount)
-                      setJoinedPlayers(nextJoined)
-                      try {
-                        localStorage.setItem(
-                          `ludo_room_${roomCode}`,
-                          JSON.stringify({
-                            playerCount,
-                            joinedPlayers: nextJoined,
-                            createdAt: Date.now(),
-                          })
-                        )
-                      } catch (err) {
-                        // ignore
-                      }
-                    }}
-                  >
-                    Mark Player Joined
-                  </button>
                 </div>
                 <div className="setup-actions">
                   <button className="btn" onClick={() => setSetupStep('settings')}>
