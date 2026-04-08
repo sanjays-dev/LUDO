@@ -140,6 +140,10 @@ const COLOR_NAMES = {
   red: 'Red',
 }
 
+const P2P_HOST_COLOR = 'green'
+const P2P_GUEST_COLOR = 'red'
+const P2P_SIGNAL_TIMEOUT_MS = 8000
+
 const P2P_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
 
 function getAvailableColorsForCount(count) {
@@ -218,6 +222,19 @@ function shortDisplayCodeFromLong(code) {
     out += alphabet[x & 31]
   }
   return out
+}
+
+function parseSignalInput(input, queryParamName) {
+  const raw = String(input || '').trim()
+  if (!raw) return ''
+  try {
+    const maybeUrl = new URL(raw)
+    const extracted = maybeUrl.searchParams.get(queryParamName)
+    if (extracted) return extracted
+  } catch {
+    // Not a URL; treat input as raw signal code.
+  }
+  return raw
 }
 
 function waitForIceGatheringComplete(pc) {
@@ -411,8 +428,8 @@ function App() {
   }, [currentPlayer])
 
   const isP2pConnected = playMode === 'p2p' && p2pStatus === 'connected' && dataChannelRef.current
-  const localColor = playMode === 'p2p' ? (isHost ? 'green' : 'red') : null
-  const remoteColor = playMode === 'p2p' ? (isHost ? 'red' : 'green') : null
+  const localColor = playMode === 'p2p' ? (isHost ? P2P_HOST_COLOR : P2P_GUEST_COLOR) : null
+  const remoteColor = playMode === 'p2p' ? (isHost ? P2P_GUEST_COLOR : P2P_HOST_COLOR) : null
 
   function sendP2pJson(payload) {
     const channel = dataChannelRef.current
@@ -680,14 +697,20 @@ function App() {
     }
     setPlayMode('p2p')
     setIsHost(true)
-    setMyColor('green')
+    setMyColor(P2P_HOST_COLOR)
     const hostName = (myName || 'Host').trim() || 'Host'
-    setPlayerNames((prev) => ({ ...prev, green: hostName }))
+    setPlayerNames((prev) => ({ ...prev, [P2P_HOST_COLOR]: hostName }))
     setPlayerCount(2)
-    setSelectedColors(['green', 'red'])
-    setPlayers(createPlayers(['green', 'red'], { ...playerNames, green: hostName }))
+    setSelectedColors([P2P_HOST_COLOR, P2P_GUEST_COLOR])
+    setPlayers(
+      createPlayers([P2P_HOST_COLOR, P2P_GUEST_COLOR], {
+        ...playerNames,
+        [P2P_HOST_COLOR]: hostName,
+      })
+    )
     setP2pStatus('creating')
     try {
+      const expectedRemoteColor = P2P_GUEST_COLOR
       const pc = new RTCPeerConnection({ iceServers: P2P_ICE_SERVERS })
       pcRef.current = pc
       const channel = pc.createDataChannel('ludo')
@@ -734,12 +757,12 @@ function App() {
             const payload = msg?.p || {}
             if (action === 'set_name' && typeof payload?.name === 'string') {
               const name = payload.name.trim() || 'Guest'
-              setPlayerNames((prev) => ({ ...prev, [remoteColor]: name }))
+              setPlayerNames((prev) => ({ ...prev, [expectedRemoteColor]: name }))
               return
             }
             if (phaseRef.current !== 'playing') return
             const currentTurn = playersRef.current[currentPlayerRef.current]
-            if (!currentTurn || currentTurn.id !== remoteColor) return
+            if (!currentTurn || currentTurn.id !== expectedRemoteColor) return
             if (action === 'roll') rollDiceRef.current?.('remote')
             if (action === 'choose' && typeof payload?.value === 'number')
               chooseMoveRef.current?.(payload.value, 'remote')
@@ -748,7 +771,7 @@ function App() {
           }
           if (msg?.t === 'hello' && typeof msg?.name === 'string') {
             const name = msg.name.trim() || 'Guest'
-            setPlayerNames((prev) => ({ ...prev, [remoteColor]: name }))
+            setPlayerNames((prev) => ({ ...prev, [expectedRemoteColor]: name }))
           }
         } catch {
           // ignore
@@ -757,7 +780,7 @@ function App() {
 
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
-      await waitForIceGatheringCompleteOrTimeout(pc, 1200)
+      await waitForIceGatheringCompleteOrTimeout(pc, P2P_SIGNAL_TIMEOUT_MS)
       const localDesc = pc.localDescription
       if (!localDesc?.sdp || localDesc.type !== 'offer') throw new Error('Offer not ready.')
       setRoomCode(encodeSignal(localDesc))
@@ -782,7 +805,7 @@ function App() {
     if (!pc) return
     setP2pStatus('connecting')
     try {
-      const decoded = decodeSignal(joinCode)
+      const decoded = decodeSignal(parseSignalInput(joinCode, 'join'))
       if (!decoded?.sdp || decoded?.type !== 'answer') throw new Error('Invalid join code')
       await pc.setRemoteDescription(decoded)
     } catch (err) {
@@ -800,14 +823,20 @@ function App() {
     }
     setPlayMode('p2p')
     setIsHost(false)
-    setMyColor('red')
+    setMyColor(P2P_GUEST_COLOR)
     const guestName = (myName || 'Guest').trim() || 'Guest'
-    setPlayerNames((prev) => ({ ...prev, red: guestName }))
+    setPlayerNames((prev) => ({ ...prev, [P2P_GUEST_COLOR]: guestName }))
     setPlayerCount(2)
-    setSelectedColors(['green', 'red'])
-    setPlayers(createPlayers(['green', 'red'], { ...playerNames, red: guestName }))
+    setSelectedColors([P2P_HOST_COLOR, P2P_GUEST_COLOR])
+    setPlayers(
+      createPlayers([P2P_HOST_COLOR, P2P_GUEST_COLOR], {
+        ...playerNames,
+        [P2P_GUEST_COLOR]: guestName,
+      })
+    )
     setP2pStatus('connecting')
     try {
+      const expectedRemoteColor = P2P_HOST_COLOR
       const pc = new RTCPeerConnection({ iceServers: P2P_ICE_SERVERS })
       pcRef.current = pc
 
@@ -850,7 +879,7 @@ function App() {
             }
             if (msg?.t === 'hello' && typeof msg?.name === 'string') {
               const name = msg.name.trim() || 'Host'
-              setPlayerNames((prev) => ({ ...prev, [remoteColor]: name }))
+              setPlayerNames((prev) => ({ ...prev, [expectedRemoteColor]: name }))
             }
           } catch {
             // ignore
@@ -858,14 +887,14 @@ function App() {
         }
       }
 
-      const incoming = roomCodeInput.trim()
+      const incoming = parseSignalInput(roomCodeInput, 'room')
       if (!incoming) throw new Error('Paste the room code first.')
       const offerDesc = decodeSignal(incoming)
       if (!offerDesc?.sdp || offerDesc?.type !== 'offer') throw new Error('Invalid room code.')
       await pc.setRemoteDescription(offerDesc)
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
-      await waitForIceGatheringCompleteOrTimeout(pc, 1200)
+      await waitForIceGatheringCompleteOrTimeout(pc, P2P_SIGNAL_TIMEOUT_MS)
       const localDesc = pc.localDescription
       if (!localDesc?.sdp || localDesc.type !== 'answer') throw new Error('Answer not ready.')
       setJoinCode(encodeSignal(localDesc))
