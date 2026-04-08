@@ -1,16 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { initializeApp } from 'firebase/app'
-import {
-  getDatabase,
-  get,
-  onDisconnect,
-  onValue,
-  push,
-  ref,
-  remove,
-  runTransaction,
-  update,
-} from 'firebase/database'
+import { QRCodeCanvas } from 'qrcode.react'
 import { ToastContainer, toast } from 'react-toastify'
 import 'react-toastify/ReactToastify.css'
 import './App.css'
@@ -151,32 +140,104 @@ const COLOR_NAMES = {
   red: 'Red',
 }
 
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+const P2P_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
+
+function getAvailableColorsForCount(count) {
+  if (count === 2) return ['green', 'red']
+  if (count === 3) return ['green', 'yellow', 'blue']
+  return COLOR_ORDER
 }
 
-const firebaseEnabled =
-  Boolean(firebaseConfig.apiKey) &&
-  Boolean(firebaseConfig.databaseURL) &&
-  Boolean(firebaseConfig.projectId)
+function base64UrlEncode(text) {
+  // SDP is ASCII, safe for btoa/atob.
+  return btoa(text).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+}
 
-const firebaseApp = firebaseEnabled ? initializeApp(firebaseConfig) : null
-const db = firebaseEnabled ? getDatabase(firebaseApp) : null
+function base64UrlDecode(base64Url) {
+  // Only strip whitespace. Do NOT strip '-', since '-' is part of base64url.
+  const cleaned = String(base64Url || '').trim().replace(/\s+/g, '')
+  const padLen = (4 - (cleaned.length % 4)) % 4
+  const padded = cleaned + '='.repeat(padLen)
+  return atob(padded.replaceAll('-', '+').replaceAll('_', '/'))
+}
 
-function getClientId() {
-  const key = 'ludo_client_id'
-  let id = localStorage.getItem(key)
-  if (!id) {
-    id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-    localStorage.setItem(key, id)
+function encodeSignal(desc) {
+  const type = desc?.type
+  const sdp = desc?.sdp
+  if (type !== 'offer' && type !== 'answer') throw new Error('Invalid signal type')
+  if (!sdp || typeof sdp !== 'string') throw new Error('Invalid signal sdp')
+  const normalizedSdp = sdp.trim().replaceAll('\r\n', '\n')
+  const typeChar = type === 'offer' ? 'o' : 'a'
+  return `1${typeChar}${base64UrlEncode(normalizedSdp)}`
+}
+
+function decodeSignal(code) {
+  // Only strip whitespace. Do NOT strip '-', since '-' is part of base64url.
+  const cleaned = String(code || '').trim().replace(/\s+/g, '')
+  if (cleaned.length < 4) throw new Error('Invalid code')
+  const version = cleaned[0]
+  const typeChar = cleaned[1]
+  if (version !== '1') throw new Error('Unsupported code version')
+  const type = typeChar === 'o' ? 'offer' : typeChar === 'a' ? 'answer' : null
+  if (!type) throw new Error('Invalid code type')
+  const normalizedSdp = base64UrlDecode(cleaned.slice(2))
+  const sdp = String(normalizedSdp || '').replaceAll('\n', '\r\n')
+  return { type, sdp }
+}
+
+function formatGroupedCode(code, groupSize = 6, groupsPerLine = 4) {
+  // Only strip whitespace. '-' is valid base64url, so don't remove it.
+  const raw = String(code || '').trim().replace(/\s+/g, '')
+  if (!raw) return ''
+  const groups = []
+  for (let i = 0; i < raw.length; i += groupSize) {
+    groups.push(raw.slice(i, i + groupSize))
   }
-  return id
+  const lines = []
+  for (let i = 0; i < groups.length; i += groupsPerLine) {
+    lines.push(groups.slice(i, i + groupsPerLine).join(' '))
+  }
+  return lines.join('\n')
+}
+
+function shortDisplayCodeFromLong(code) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+  const raw = String(code || '').trim()
+  if (!raw) return ''
+  let hash = 2166136261
+  for (let i = 0; i < raw.length; i += 1) {
+    hash ^= raw.charCodeAt(i)
+    hash = Math.imul(hash, 16777619) >>> 0
+  }
+  let x = hash || 1
+  let out = ''
+  for (let i = 0; i < 6; i += 1) {
+    x ^= x << 13
+    x ^= x >>> 17
+    x ^= x << 5
+    out += alphabet[x & 31]
+  }
+  return out
+}
+
+function waitForIceGatheringComplete(pc) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve()
+  return new Promise((resolve) => {
+    const onChange = () => {
+      if (pc.iceGatheringState === 'complete') {
+        pc.removeEventListener('icegatheringstatechange', onChange)
+        resolve()
+      }
+    }
+    pc.addEventListener('icegatheringstatechange', onChange)
+  })
+}
+
+function waitForIceGatheringCompleteOrTimeout(pc, timeoutMs = 1200) {
+  return Promise.race([
+    waitForIceGatheringComplete(pc),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ])
 }
 
 function createPlayers(colors = COLOR_ORDER, namesByColor = {}, botByColor = {}) {
@@ -222,14 +283,9 @@ function getTrackIndicesBetween(color, fromSteps, moveValue) {
 
 function App() {
   const [phase, setPhase] = useState('setup') // setup | playing
-  const [setupStep, setSetupStep] = useState('mode') // mode | create | join | settings
-  const [playMode, setPlayMode] = useState(null) // local | room
+  const [setupStep, setSetupStep] = useState('mode') // mode | settings | p2p_create | p2p_join
+  const [playMode, setPlayMode] = useState(null) // local | p2p
   const [playerCount, setPlayerCount] = useState(4)
-  const [roomCode, setRoomCode] = useState('')
-  const [joinCode, setJoinCode] = useState('')
-  const [joinStatus, setJoinStatus] = useState('idle') // idle | loading | success | error
-  const [joinedPlayers, setJoinedPlayers] = useState(1)
-  const [colorsTaken, setColorsTaken] = useState([])
   const [selectedColors, setSelectedColors] = useState(() => [...COLOR_ORDER])
   const [playerNames, setPlayerNames] = useState({})
   const [myColor, setMyColor] = useState(null)
@@ -254,25 +310,39 @@ function App() {
   const [captureCredits, setCaptureCredits] = useState({})
   const [chatMessages, setChatMessages] = useState([])
   const [chatInput, setChatInput] = useState('')
+  const [roomCode, setRoomCode] = useState('')
+  const [roomCodeInput, setRoomCodeInput] = useState('')
+  const [joinCode, setJoinCode] = useState('')
+  const [p2pStatus, setP2pStatus] = useState('idle') // idle | creating | waiting_answer | answer_ready | connecting | connected | error
+  const [isHost, setIsHost] = useState(false)
+  const [showHostJoinPaste, setShowHostJoinPaste] = useState(false)
+  const [showFullRoomCode, setShowFullRoomCode] = useState(false)
+  const [showFullJoinCode, setShowFullJoinCode] = useState(false)
   const playersRef = useRef(players)
   const animatingRef = useRef(false)
   const finishedRef = useRef([])
   const phaseRef = useRef(phase)
   const gameOverRef = useRef(gameOver)
+  const currentPlayerRef = useRef(currentPlayer)
   const diceVisibleUntilRef = useRef(0)
   const diceClearTimerRef = useRef(null)
-  const roomCreatedRef = useRef(false)
-  const lastSentNameRef = useRef('')
-  const clientIdRef = useRef(getClientId())
+  const pcRef = useRef(null)
+  const dataChannelRef = useRef(null)
+  const p2pSendTimerRef = useRef(null)
+  const intentionalCloseRef = useRef(false)
+  const rollDiceRef = useRef(null)
+  const chooseMoveRef = useRef(null)
+  const handleMoveTokenRef = useRef(null)
+  const applyRemoteStateRef = useRef(null)
+  const lastCopiedRef = useRef({ room: '', join: '' })
+  const didLoadRoomFromUrlRef = useRef(false)
 
   const activeColors = useMemo(() => {
     return COLOR_ORDER.filter((color) => selectedColors.includes(color))
   }, [selectedColors])
 
   const availableColors = useMemo(() => {
-    if (playerCount === 2) return ['green', 'red']
-    if (playerCount === 3) return ['green', 'yellow', 'blue']
-    return COLOR_ORDER
+    return getAvailableColorsForCount(playerCount)
   }, [playerCount])
 
   useEffect(() => {
@@ -281,6 +351,44 @@ function App() {
       setShowTutorial(true)
     }
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (didLoadRoomFromUrlRef.current) return
+    try {
+      const url = new URL(window.location.href)
+      const room = url.searchParams.get('room')
+      if (!room) return
+      didLoadRoomFromUrlRef.current = true
+      setSetupStep('p2p_join')
+      setP2pStatus('idle')
+      setPlayMode(null)
+      setRoomCode('')
+      setJoinCode('')
+      setRoomCodeInput(room)
+      setShowHostJoinPaste(false)
+      setShowFullRoomCode(false)
+      setShowFullJoinCode(false)
+      toast.info('Room code loaded. Tap "Generate Join Code".')
+      url.searchParams.delete('room')
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash)
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  useEffect(() => {
+    // Keep player objects in sync with editable names.
+    setPlayers((prev) => {
+      const next = prev.map((player) => {
+        const nextName = (playerNames[player.id] || '').trim()
+        if (!nextName || nextName === player.name) return player
+        return { ...player, name: nextName }
+      })
+      playersRef.current = next
+      return next
+    })
+  }, [playerNames])
 
   useEffect(() => {
     playersRef.current = players
@@ -297,6 +405,157 @@ function App() {
   useEffect(() => {
     gameOverRef.current = gameOver
   }, [gameOver])
+
+  useEffect(() => {
+    currentPlayerRef.current = currentPlayer
+  }, [currentPlayer])
+
+  const isP2pConnected = playMode === 'p2p' && p2pStatus === 'connected' && dataChannelRef.current
+  const localColor = playMode === 'p2p' ? (isHost ? 'green' : 'red') : null
+  const remoteColor = playMode === 'p2p' ? (isHost ? 'red' : 'green') : null
+
+  function sendP2pJson(payload) {
+    const channel = dataChannelRef.current
+    if (!channel || channel.readyState !== 'open') return false
+    try {
+      channel.send(JSON.stringify(payload))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  function scheduleP2pStateSync() {
+    if (!isHost || !isP2pConnected) return
+    if (p2pSendTimerRef.current) return
+    p2pSendTimerRef.current = setTimeout(() => {
+      p2pSendTimerRef.current = null
+      sendP2pJson({
+        t: 'state',
+        s: {
+          phase,
+          playerCount,
+          selectedColors,
+          playerNames,
+          players: playersRef.current,
+          currentPlayer,
+          dice,
+          lastRoll,
+          hasRolled,
+          isRolling,
+          rollingValue,
+          moveMode,
+          selectedMove,
+          message,
+          finishedOrder: finishedRef.current,
+          eliminatedId,
+          showElimination,
+          capturedInfo,
+          captureCredits,
+          gameOver,
+        },
+      })
+    }, 80)
+  }
+
+  useEffect(() => {
+    if (!isHost || !isP2pConnected) return
+    scheduleP2pStateSync()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    phase,
+    playerCount,
+    selectedColors,
+    playerNames,
+    players,
+    currentPlayer,
+    dice,
+    lastRoll,
+    hasRolled,
+    isRolling,
+    rollingValue,
+    moveMode,
+    selectedMove,
+    message,
+    eliminatedId,
+    showElimination,
+    capturedInfo,
+    captureCredits,
+    gameOver,
+  ])
+
+  function applyRemoteState(next) {
+    if (!next) return
+    if (next.playerCount) setPlayerCount(next.playerCount)
+    if (next.selectedColors) setSelectedColors(next.selectedColors)
+    if (next.playerNames) setPlayerNames(next.playerNames)
+    if (next.phase) {
+      setPhase(next.phase)
+      phaseRef.current = next.phase
+    }
+    if (Array.isArray(next.players)) {
+      playersRef.current = next.players
+      setPlayers(next.players)
+    }
+    if (typeof next.currentPlayer === 'number') setCurrentPlayer(next.currentPlayer)
+    if (typeof next.dice !== 'undefined') setDice(next.dice)
+    if (typeof next.lastRoll !== 'undefined') setLastRoll(next.lastRoll)
+    if (typeof next.hasRolled === 'boolean') setHasRolled(next.hasRolled)
+    if (typeof next.isRolling === 'boolean') setIsRolling(next.isRolling)
+    if (typeof next.rollingValue !== 'undefined') setRollingValue(next.rollingValue)
+    if (typeof next.moveMode === 'string') setMoveMode(next.moveMode)
+    if (typeof next.selectedMove !== 'undefined') setSelectedMove(next.selectedMove)
+    if (typeof next.message === 'string') setMessage(next.message)
+    if (Array.isArray(next.finishedOrder)) {
+      finishedRef.current = next.finishedOrder
+      setFinishedOrder(next.finishedOrder)
+    }
+    if (typeof next.eliminatedId !== 'undefined') setEliminatedId(next.eliminatedId)
+    if (typeof next.showElimination === 'boolean') setShowElimination(next.showElimination)
+    if (typeof next.capturedInfo !== 'undefined') setCapturedInfo(next.capturedInfo)
+    if (next.captureCredits) setCaptureCredits(next.captureCredits)
+    if (typeof next.gameOver === 'boolean') setGameOver(next.gameOver)
+  }
+
+  useEffect(() => {
+    applyRemoteStateRef.current = applyRemoteState
+  }, [])
+
+  function cleanupP2p() {
+    intentionalCloseRef.current = true
+    try {
+      if (p2pSendTimerRef.current) {
+        clearTimeout(p2pSendTimerRef.current)
+        p2pSendTimerRef.current = null
+      }
+      dataChannelRef.current?.close?.()
+    } catch {
+      // ignore
+    }
+    try {
+      pcRef.current?.close?.()
+    } catch {
+      // ignore
+    }
+    dataChannelRef.current = null
+    pcRef.current = null
+    setRoomCode('')
+    setRoomCodeInput('')
+    setJoinCode('')
+    setP2pStatus('idle')
+    setIsHost(false)
+    setShowHostJoinPaste(false)
+    setShowFullRoomCode(false)
+    setShowFullJoinCode(false)
+    setTimeout(() => {
+      intentionalCloseRef.current = false
+    }, 0)
+  }
+
+  useEffect(() => {
+    return () => cleanupP2p()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     setSelectedColors((prev) => {
@@ -319,114 +578,6 @@ function App() {
       return next
     })
   }, [activeColors])
-
-  useEffect(() => {
-    lastSentNameRef.current = ''
-  }, [myColor, roomCode])
-
-  useEffect(() => {
-    if (playMode !== 'room') {
-      roomCreatedRef.current = false
-      return
-    }
-    if (!db || !roomCode) return
-    const roomRef = ref(db, `rooms/${roomCode}`)
-    const unsubscribe = onValue(roomRef, (snapshot) => {
-      const room = snapshot.val()
-      if (!room) return
-      const count = room.playerCount || 2
-      setPlayerCount(count)
-      const participants = room.participants || {}
-      const colors = Object.values(participants)
-        .map((p) => p?.color)
-        .filter(Boolean)
-      setColorsTaken(colors)
-      setJoinedPlayers(Math.min(colors.length, count))
-      const names = {}
-      Object.values(participants).forEach((p) => {
-        if (p?.color && p?.name) names[p.color] = p.name
-      })
-      if (Object.keys(names).length) {
-        setPlayerNames((prev) => ({ ...prev, ...names }))
-      }
-    })
-    return () => unsubscribe()
-  }, [playMode, roomCode, db])
-
-  useEffect(() => {
-    if (playMode !== 'room' || setupStep !== 'create' || !roomCode) return
-    if (!firebaseEnabled || !db) {
-      toast.error('Firebase is not configured yet.')
-      return
-    }
-    if (roomCreatedRef.current) return
-    const clientId = clientIdRef.current
-    const name = myName || 'Player 1'
-    const color = myColor || 'green'
-    const roomRef = ref(db, `rooms/${roomCode}`)
-    runTransaction(roomRef, (current) => {
-      if (current) return
-      return {
-        playerCount,
-        createdAt: Date.now(),
-        participants: {
-          [clientId]: {
-            color,
-            name,
-            joinedAt: Date.now(),
-          },
-        },
-      }
-    })
-      .then((result) => {
-        if (!result.committed) {
-          toast.error('Room already exists. Generate a new code.')
-          playSfx('error')
-          return
-        }
-        roomCreatedRef.current = true
-        setJoinStatus('success')
-        setColorsTaken([color])
-        setJoinedPlayers(1)
-        onDisconnect(ref(db, `rooms/${roomCode}/participants/${clientId}`)).remove()
-      })
-      .catch(() => {
-        toast.error('Unable to create room.')
-        playSfx('error')
-      })
-  }, [playMode, setupStep, roomCode, playerCount, myColor, myName, db])
-
-  useEffect(() => {
-    if (playMode !== 'room' || setupStep !== 'create' || !roomCode || !db) return
-    if (!roomCreatedRef.current) return
-    update(ref(db, `rooms/${roomCode}`), { playerCount })
-  }, [playerCount, playMode, setupStep, roomCode, db])
-
-  useEffect(() => {
-    if (playMode !== 'room' || !roomCode || !myColor || !db) return
-    const nextName = (playerNames[myColor] || myName || '').trim()
-    if (!nextName || nextName === lastSentNameRef.current) return
-    lastSentNameRef.current = nextName
-    const clientId = clientIdRef.current
-    update(ref(db, `rooms/${roomCode}/participants/${clientId}`), {
-      color: myColor,
-      name: nextName,
-      joinedAt: Date.now(),
-    })
-  }, [playerNames, myName, myColor, roomCode, playMode, db])
-
-  useEffect(() => {
-    if (!roomCode || playMode !== 'room' || phase !== 'playing' || !db) return
-    const chatRef = ref(db, `rooms/${roomCode}/chat`)
-    const unsubscribe = onValue(chatRef, (snapshot) => {
-      const raw = snapshot.val() || {}
-      const messages = Object.values(raw).sort(
-        (a, b) => (a?.createdAt || 0) - (b?.createdAt || 0)
-      )
-      setChatMessages(messages)
-    })
-    return () => unsubscribe()
-  }, [roomCode, playMode, phase, db])
 
   function playTone({ frequency = 440, duration = 0.12, type = 'sine', volume = 0.15 }) {
     try {
@@ -497,15 +648,15 @@ function App() {
   function sendChat() {
     const text = chatInput.trim()
     if (!text) return
-    if (playMode === 'room' && roomCode && db) {
+    if (playMode === 'p2p' && isP2pConnected) {
       const msg = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        name: current?.name || myName || 'Player',
+        name: myName?.trim() || (localColor ? playerNames[localColor] : '') || 'You',
         text,
         at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        createdAt: Date.now(),
       }
-      push(ref(db, `rooms/${roomCode}/chat`), msg)
+      sendP2pJson({ t: 'chat', m: msg })
+      setChatMessages((prev) => [...prev, msg].slice(-80))
       setChatInput('')
       return
     }
@@ -518,13 +669,242 @@ function App() {
         at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       },
     ])
-    setChatInput('')
+      setChatInput('')
+  }
+
+  async function startP2pHost() {
+    cleanupP2p()
+    if (typeof RTCPeerConnection === 'undefined') {
+      toast.error('Multiplayer is not supported on this browser/device.')
+      return
+    }
+    setPlayMode('p2p')
+    setIsHost(true)
+    setMyColor('green')
+    const hostName = (myName || 'Host').trim() || 'Host'
+    setPlayerNames((prev) => ({ ...prev, green: hostName }))
+    setPlayerCount(2)
+    setSelectedColors(['green', 'red'])
+    setPlayers(createPlayers(['green', 'red'], { ...playerNames, green: hostName }))
+    setP2pStatus('creating')
+    try {
+      const pc = new RTCPeerConnection({ iceServers: P2P_ICE_SERVERS })
+      pcRef.current = pc
+      const channel = pc.createDataChannel('ludo')
+      dataChannelRef.current = channel
+
+      pc.onconnectionstatechange = () => {
+        const state = pc.connectionState
+        if (state === 'failed' || state === 'disconnected') {
+          setP2pStatus('error')
+          toast.error('Connection failed. Try creating a new room.')
+        }
+      }
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === 'failed') {
+          setP2pStatus('error')
+          toast.error('ICE failed (network blocked). Try a different network.')
+        }
+      }
+
+      channel.onopen = () => {
+        setP2pStatus('connected')
+        toast.success('Connected!')
+        setSetupStep('settings')
+        sendP2pJson({ t: 'hello', name: myName?.trim() || 'Host' })
+      }
+      channel.onclose = () => {
+        if (intentionalCloseRef.current) return
+        toast.info('Disconnected.')
+        cleanupP2p()
+        setSetupStep('mode')
+        setPlayMode(null)
+      }
+      channel.onerror = () => {
+        setP2pStatus('error')
+      }
+      channel.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(String(evt.data || ''))
+          if (msg?.t === 'chat' && msg?.m) {
+            setChatMessages((prev) => [...prev, msg.m].slice(-80))
+          }
+          if (msg?.t === 'action') {
+            const action = msg?.a
+            const payload = msg?.p || {}
+            if (action === 'set_name' && typeof payload?.name === 'string') {
+              const name = payload.name.trim() || 'Guest'
+              setPlayerNames((prev) => ({ ...prev, [remoteColor]: name }))
+              return
+            }
+            if (phaseRef.current !== 'playing') return
+            const currentTurn = playersRef.current[currentPlayerRef.current]
+            if (!currentTurn || currentTurn.id !== remoteColor) return
+            if (action === 'roll') rollDiceRef.current?.('remote')
+            if (action === 'choose' && typeof payload?.value === 'number')
+              chooseMoveRef.current?.(payload.value, 'remote')
+            if (action === 'move' && typeof payload?.tokenId === 'string')
+              handleMoveTokenRef.current?.(payload.tokenId, 'remote')
+          }
+          if (msg?.t === 'hello' && typeof msg?.name === 'string') {
+            const name = msg.name.trim() || 'Guest'
+            setPlayerNames((prev) => ({ ...prev, [remoteColor]: name }))
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+      await waitForIceGatheringCompleteOrTimeout(pc, 1200)
+      const localDesc = pc.localDescription
+      if (!localDesc?.sdp || localDesc.type !== 'offer') throw new Error('Offer not ready.')
+      setRoomCode(encodeSignal(localDesc))
+      setP2pStatus('waiting_answer')
+      toast.success('Room code generated. Share it with your friend.')
+      playSfx('join')
+    } catch (err) {
+      console.error(err)
+      setP2pStatus('error')
+      toast.error(err?.message ? `Unable to create room: ${err.message}` : 'Unable to create room.')
+      cleanupP2p()
+      setPlayMode(null)
+    }
+  }
+
+  async function acceptP2pAnswer() {
+    if (!joinCode.trim()) {
+      toast.error('Paste the join code first.')
+      return
+    }
+    const pc = pcRef.current
+    if (!pc) return
+    setP2pStatus('connecting')
+    try {
+      const decoded = decodeSignal(joinCode)
+      if (!decoded?.sdp || decoded?.type !== 'answer') throw new Error('Invalid join code')
+      await pc.setRemoteDescription(decoded)
+    } catch (err) {
+      console.error(err)
+      setP2pStatus('error')
+      toast.error(err?.message ? `Invalid join code: ${err.message}` : 'Invalid join code.')
+    }
+  }
+
+  async function startP2pGuest() {
+    cleanupP2p()
+    if (typeof RTCPeerConnection === 'undefined') {
+      toast.error('Multiplayer is not supported on this browser/device.')
+      return
+    }
+    setPlayMode('p2p')
+    setIsHost(false)
+    setMyColor('red')
+    const guestName = (myName || 'Guest').trim() || 'Guest'
+    setPlayerNames((prev) => ({ ...prev, red: guestName }))
+    setPlayerCount(2)
+    setSelectedColors(['green', 'red'])
+    setPlayers(createPlayers(['green', 'red'], { ...playerNames, red: guestName }))
+    setP2pStatus('connecting')
+    try {
+      const pc = new RTCPeerConnection({ iceServers: P2P_ICE_SERVERS })
+      pcRef.current = pc
+
+      pc.onconnectionstatechange = () => {
+        const state = pc.connectionState
+        if (state === 'failed' || state === 'disconnected') {
+          setP2pStatus('error')
+          toast.error('Connection failed. Try again.')
+        }
+      }
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === 'failed') {
+          setP2pStatus('error')
+          toast.error('ICE failed (network blocked). Try a different network.')
+        }
+      }
+
+      pc.ondatachannel = (evt) => {
+        const channel = evt.channel
+        dataChannelRef.current = channel
+        channel.onopen = () => {
+          setP2pStatus('connected')
+          toast.success('Connected!')
+          setSetupStep('settings')
+          sendP2pJson({ t: 'hello', name: myName?.trim() || 'Guest' })
+        }
+        channel.onclose = () => {
+          if (intentionalCloseRef.current) return
+          toast.info('Disconnected.')
+          cleanupP2p()
+          setSetupStep('mode')
+          setPlayMode(null)
+        }
+        channel.onmessage = (e) => {
+          try {
+            const msg = JSON.parse(String(e.data || ''))
+            if (msg?.t === 'state') applyRemoteStateRef.current?.(msg.s)
+            if (msg?.t === 'chat' && msg?.m) {
+              setChatMessages((prev) => [...prev, msg.m].slice(-80))
+            }
+            if (msg?.t === 'hello' && typeof msg?.name === 'string') {
+              const name = msg.name.trim() || 'Host'
+              setPlayerNames((prev) => ({ ...prev, [remoteColor]: name }))
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      const incoming = roomCodeInput.trim()
+      if (!incoming) throw new Error('Paste the room code first.')
+      const offerDesc = decodeSignal(incoming)
+      if (!offerDesc?.sdp || offerDesc?.type !== 'offer') throw new Error('Invalid room code.')
+      await pc.setRemoteDescription(offerDesc)
+      const answer = await pc.createAnswer()
+      await pc.setLocalDescription(answer)
+      await waitForIceGatheringCompleteOrTimeout(pc, 1200)
+      const localDesc = pc.localDescription
+      if (!localDesc?.sdp || localDesc.type !== 'answer') throw new Error('Answer not ready.')
+      setJoinCode(encodeSignal(localDesc))
+      setP2pStatus('answer_ready')
+      toast.success('Join code generated. Send it back to the host.')
+      playSfx('join')
+    } catch (err) {
+      console.error(err)
+      setP2pStatus('error')
+      toast.error(err?.message ? `Unable to join: ${err.message}` : 'Unable to join.')
+      cleanupP2p()
+      setPlayMode(null)
+    }
   }
 
   const winner = useMemo(() => {
     if (!finishedOrder.length) return null
     return players.find((player) => player.id === finishedOrder[0]) || null
   }, [players, finishedOrder])
+
+  useEffect(() => {
+    const tryCopy = async (text, kind) => {
+      if (!text) return
+      if (lastCopiedRef.current[kind] === text) return
+      lastCopiedRef.current[kind] = text
+      try {
+        await navigator.clipboard.writeText(text)
+        toast.success(kind === 'join' ? 'Join code copied.' : 'Room code copied.')
+      } catch {
+        // ignore
+      }
+    }
+    if (setupStep === 'p2p_create' && roomCode && p2pStatus === 'waiting_answer') {
+      tryCopy(roomCode, 'room')
+    }
+    if (setupStep === 'p2p_join' && joinCode && p2pStatus === 'answer_ready') {
+      tryCopy(joinCode, 'join')
+    }
+  }, [roomCode, joinCode, setupStep, p2pStatus])
 
   const eliminatedPlayer = useMemo(() => {
     if (!eliminatedId) return null
@@ -639,173 +1019,49 @@ function App() {
     })
   }
 
-  function generateRoomCode() {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-    let code = ''
-    for (let i = 0; i < 6; i += 1) {
-      code += chars[Math.floor(Math.random() * chars.length)]
-    }
-    return code
-  }
-
   function chooseMode(mode) {
     if (mode === 'local') {
+      if (playMode === 'p2p') cleanupP2p()
       setPlayMode('local')
       setSetupStep('settings')
-      setJoinedPlayers(playerCount)
       return
     }
-    if (mode === 'room') {
-      const code = generateRoomCode()
-      const name = 'Player 1'
-      setPlayMode('room')
-      setRoomCode(code)
-      setJoinedPlayers(1)
-      setColorsTaken(['green'])
-      setMyColor('green')
-      setMyName(name)
-      lastSentNameRef.current = ''
-      roomCreatedRef.current = false
-      setSetupStep('create')
-    }
-  }
-
-  async function handleJoinRoom() {
-    if (!joinCode.trim()) {
-      toast.error('Enter a room code to join.')
-      return
-    }
-    const incoming = joinCode.trim().toUpperCase()
-    if (!myColor) {
-      toast.error('Choose a color to join.')
-      setJoinStatus('error')
-      return
-    }
-    if (!firebaseEnabled || !db) {
-      toast.error('Firebase is not configured yet.')
-      setJoinStatus('error')
-      return
-    }
-    setJoinStatus('loading')
-    const roomRef = ref(db, `rooms/${incoming}`)
-    const snapshot = await get(roomRef)
-    if (!snapshot.exists()) {
-      toast.error('Room not found. Check the code and try again.')
-      setJoinStatus('error')
-      playSfx('error')
-      return
-    }
-    const current = snapshot.val() || {}
-    const participants = current.participants || {}
-    const colors = Object.values(participants)
-      .map((p) => p?.color)
-      .filter(Boolean)
-    if (colors.includes(myColor)) {
-      setJoinStatus('error')
-      toast.error('That color is already taken.')
-      playSfx('error')
-      return
-    }
-    if (colors.length >= (current.playerCount || 2)) {
-      setJoinStatus('error')
-      toast.error('Room is full.')
-      playSfx('error')
-      return
-    }
-    const clientId = clientIdRef.current
-    const name = myName || `Player ${colors.length + 1}`
-    const joinResult = await runTransaction(roomRef, (room) => {
-      if (!room) return
-      const nextParticipants = room.participants || {}
-      const taken = Object.values(nextParticipants)
-        .map((p) => p?.color)
-        .filter(Boolean)
-      if (taken.includes(myColor)) return
-      if (taken.length >= (room.playerCount || 2)) return
-      nextParticipants[clientId] = { color: myColor, name, joinedAt: Date.now() }
-      return { ...room, participants: nextParticipants }
-    })
-    if (!joinResult.committed) {
-      setJoinStatus('error')
-      toast.error('Unable to join room. Try again.')
-      playSfx('error')
-      return
-    }
-    onDisconnect(ref(db, `rooms/${incoming}/participants/${clientId}`)).remove()
-    setRoomCode(incoming)
-    const joinedRoom = joinResult.snapshot.val() || {}
-    const joinedParticipants = joinedRoom.participants || {}
-    const joinedColors = Object.values(joinedParticipants)
-      .map((p) => p?.color)
-      .filter(Boolean)
-    setPlayerCount(joinedRoom.playerCount || playerCount)
-    setJoinedPlayers(Math.min(joinedColors.length, joinedRoom.playerCount || playerCount))
-    setColorsTaken(joinedColors)
-    const nameMap = {}
-    Object.values(joinedParticipants).forEach((p) => {
-      if (p?.color && p?.name) nameMap[p.color] = p.name
-    })
-    if (Object.keys(nameMap).length) {
-      setPlayerNames((prev) => ({ ...prev, ...nameMap }))
-    }
-    lastSentNameRef.current = ''
-    setJoinStatus('success')
-    toast.success('Room joined!')
-    playSfx('join')
-    setSetupStep('settings')
   }
 
   function handleBackToMode() {
-    if (playMode === 'room' && roomCode && myColor && db) {
-      const clientId = clientIdRef.current
-      remove(ref(db, `rooms/${roomCode}/participants/${clientId}`))
-    }
-    roomCreatedRef.current = false
+    if (playMode === 'p2p') cleanupP2p()
     setPlayMode(null)
     setSetupStep('mode')
-    setJoinStatus('idle')
-    setJoinedPlayers(1)
-    setColorsTaken([])
     setMyColor(null)
     setMyName('')
   }
 
   function handleBackToSetup() {
-    if (playMode === 'room' && roomCode && myColor && db) {
-      const clientId = clientIdRef.current
-      remove(ref(db, `rooms/${roomCode}/participants/${clientId}`))
-    }
-    roomCreatedRef.current = false
     setPhase('setup')
     setSetupStep('mode')
+    if (playMode === 'p2p') cleanupP2p()
     setPlayMode(null)
-    setJoinStatus('idle')
-    setJoinedPlayers(1)
-    setColorsTaken([])
     setMyColor(null)
     setMyName('')
   }
 
   function startGame() {
+    if (playMode === 'p2p') {
+      if (!isHost) {
+        toast.info('Waiting for host to start the game.')
+        return
+      }
+      if (!isP2pConnected) {
+        toast.error('Connect to your friend first.')
+        return
+      }
+    }
     if (activeColors.length < 2 || activeColors.length !== playerCount) {
       toast.info(`Choose exactly ${playerCount} colors to start.`)
       return
     }
-    const allowBotFill =
-      playMode === 'room' && playerCount === 4 && joinedPlayers === 3
-    if (playMode === 'room' && joinedPlayers < playerCount && !allowBotFill) {
-      toast.info('Wait for all players to join.')
-      return
-    }
     const botByColor = {}
     const names = { ...playerNames }
-    if (allowBotFill) {
-      const botColor =
-        activeColors.find((color) => !colorsTaken.includes(color)) ||
-        activeColors[activeColors.length - 1]
-      botByColor[botColor] = true
-      names[botColor] = names[botColor] || 'Bot'
-    }
     setPlayers(createPlayers(activeColors, names, botByColor))
     setPhase('playing')
     phaseRef.current = 'playing'
@@ -833,7 +1089,18 @@ function App() {
     playSfx('start')
   }
 
-  function rollDice() {
+  function rollDice(source = 'local') {
+    if (playMode === 'p2p' && isP2pConnected && source === 'local' && !isHost) {
+      const currentTurn = players[currentPlayer]
+      if (!currentTurn || currentTurn.id !== localColor) return
+      sendP2pJson({ t: 'action', a: 'roll' })
+      return
+    }
+    if (playMode === 'p2p' && isP2pConnected) {
+      const expected = source === 'remote' ? remoteColor : localColor
+      const currentTurn = players[currentPlayer]
+      if (!currentTurn || currentTurn.id !== expected) return
+    }
     if (
       phase !== 'playing' ||
       hasRolled ||
@@ -853,6 +1120,7 @@ function App() {
     playTone({ frequency: 540, type: 'triangle', duration: 0.14, volume: 0.12 })
 
     const player = players[currentPlayer]
+    const hasCapture = Boolean(captureCredits[player.id])
     const enemyTrackIndices = new Set()
     players.forEach((p, idx) => {
       if (idx === currentPlayer) return
@@ -902,6 +1170,10 @@ function App() {
     }, 450)
   }
 
+  useEffect(() => {
+    rollDiceRef.current = rollDice
+  })
+
   function advanceTurn(playersState) {
     let next = currentPlayer
     const total = playersState.length
@@ -922,6 +1194,32 @@ function App() {
         moveMode === 'choose' ? 'Choose a number.' : 'Roll the dice.'
       }`
     )
+  }
+
+  function setMoveModeSafe(nextMode) {
+    if (playMode === 'p2p' && !isHost) {
+      toast.info('Only the host can change the move mode in multiplayer.')
+      return
+    }
+    if (moveMode === nextMode) return
+    if (phase !== 'playing' || gameOver || isAnimating || isRolling) return
+    if (hasRolled) {
+      toast.info('Finish the current move before switching mode.')
+      return
+    }
+    setMoveMode(nextMode)
+    setSelectedMove(null)
+    setDice(null)
+    setLastRoll(null)
+    setHasRolled(false)
+    const currentPlayerInfo = players[currentPlayer]
+    if (currentPlayerInfo) {
+      setMessage(
+        `${currentPlayerInfo.name}'s turn. ${
+          nextMode === 'choose' ? 'Choose a number.' : 'Roll the dice.'
+        }`
+      )
+    }
   }
 
   function resetGame() {
@@ -985,7 +1283,18 @@ function App() {
     }
   }
 
-  async function handleMoveToken(tokenId) {
+  async function handleMoveToken(tokenId, source = 'local') {
+    if (playMode === 'p2p' && isP2pConnected && source === 'local' && !isHost) {
+      const currentTurn = players[currentPlayer]
+      if (!currentTurn || currentTurn.id !== localColor) return
+      sendP2pJson({ t: 'action', a: 'move', p: { tokenId } })
+      return
+    }
+    if (playMode === 'p2p' && isP2pConnected) {
+      const expected = source === 'remote' ? remoteColor : localColor
+      const currentTurn = players[currentPlayer]
+      if (!currentTurn || currentTurn.id !== expected) return
+    }
     if (phase !== 'playing' || !hasRolled || gameOver || !movableTokenIds.has(tokenId))
       return
     if (animatingRef.current || isAnimating) return
@@ -1104,7 +1413,22 @@ function App() {
     }
   }
 
-  function chooseMove(value) {
+  useEffect(() => {
+    handleMoveTokenRef.current = handleMoveToken
+  })
+
+  function chooseMove(value, source = 'local') {
+    if (playMode === 'p2p' && isP2pConnected && source === 'local' && !isHost) {
+      const currentTurn = players[currentPlayer]
+      if (!currentTurn || currentTurn.id !== localColor) return
+      sendP2pJson({ t: 'action', a: 'choose', p: { value } })
+      return
+    }
+    if (playMode === 'p2p' && isP2pConnected) {
+      const expected = source === 'remote' ? remoteColor : localColor
+      const currentTurn = players[currentPlayer]
+      if (!currentTurn || currentTurn.id !== expected) return
+    }
     if (phase !== 'playing' || hasRolled || gameOver || moveMode !== 'choose' || isAnimating)
       return
     setSelectedMove(value)
@@ -1115,6 +1439,7 @@ function App() {
     playTone({ frequency: 520, type: 'triangle', duration: 0.1, volume: 0.1 })
 
     const player = players[currentPlayer]
+    const hasCapture = Boolean(captureCredits[player.id])
     const enemyTrackIndices = new Set()
     players.forEach((p, idx) => {
       if (idx === currentPlayer) return
@@ -1150,6 +1475,10 @@ function App() {
       setMessage(`${player.name} chose ${value}. Choose a token to move.`)
     }
   }
+
+  useEffect(() => {
+    chooseMoveRef.current = chooseMove
+  })
 
   function cellClassFor(r, c) {
     const key = `${r},${c}`
@@ -1251,7 +1580,7 @@ function App() {
             {setupStep === 'mode' ? (
               <>
                 <h1>Play Mode</h1>
-                <p>Start local play or create a room to play with friends.</p>
+                <p>Play locally, or connect to a friend by sharing a room code (copy/paste or scan QR).</p>
                 <div className="mode-grid">
                   <button
                     className="mode-card"
@@ -1264,63 +1593,39 @@ function App() {
                   <button
                     className="mode-card"
                     type="button"
-                    onClick={() => chooseMode('room')}
+                    onClick={() => {
+                      setSetupStep('p2p_create')
+                      setP2pStatus('idle')
+                      setRoomCode('')
+                      setRoomCodeInput('')
+                    }}
                   >
-                    <strong>Create Room</strong>
-                    <span>Get a code and play with friends.</span>
+                    <strong>Multiplayer (Host)</strong>
+                    <span>Create a room code and share it.</span>
                   </button>
                   <button
                     className="mode-card"
                     type="button"
                     onClick={() => {
-                      setPlayMode('room')
-                      setSetupStep('join')
-                      setJoinStatus('idle')
+                      setSetupStep('p2p_join')
+                      setP2pStatus('idle')
+                      setRoomCode('')
+                      setRoomCodeInput('')
                     }}
                   >
-                    <strong>Join Room</strong>
-                    <span>Enter a code to join a room.</span>
+                    <strong>Multiplayer (Join)</strong>
+                    <span>Enter a room code to join.</span>
                   </button>
                 </div>
               </>
             ) : null}
 
-            {setupStep === 'create' ? (
+            {setupStep === 'p2p_create' ? (
               <>
-                <h1>Create Room</h1>
-                <p>Choose player count first. Then share the code with friends.</p>
-                <div className="player-count">
-                  {[2, 3, 4].map((count) => (
-                    <button
-                      key={count}
-                      type="button"
-                      className={`count-chip ${playerCount === count ? 'active' : ''}`}
-                      onClick={() => {
-                        setPlayerCount(count)
-                        setJoinedPlayers((prev) => Math.min(prev, count))
-                      }}
-                    >
-                      {count} Players
-                    </button>
-                  ))}
-                </div>
-                <div className="room-card">
-                  <span className="room-label">Room Code</span>
-                  <div className="room-code">{roomCode || '------'}</div>
-                  <button
-                    className="btn ghost"
-                    onClick={() => {
-                      const code = generateRoomCode()
-                      setRoomCode(code)
-                      setJoinedPlayers(1)
-                      setColorsTaken(myColor ? [myColor] : [])
-                      roomCreatedRef.current = false
-                      toast.success('New room code generated.')
-                    }}
-                  >
-                    Generate New Code
-                  </button>
-                </div>
+                <h1>Multiplayer (Host)</h1>
+                <p>
+                  Create a room code, share it, then paste the join code back from your friend.
+                </p>
                 <div className="room-join">
                   <label>
                     Your name
@@ -1332,43 +1637,147 @@ function App() {
                     />
                   </label>
                 </div>
-                <div className="color-grid">
-                  {availableColors.map((color) => {
-                    const selected = myColor === color
-                    return (
-                      <button
-                        key={color}
-                        type="button"
-                        className={`color-card ${color} ${selected ? 'selected' : ''}`}
-                        onClick={() => setMyColor(color)}
-                      >
-                        <span className={`color-token ${color}`} />
-                        <strong>{COLOR_NAMES[color]}</strong>
-                        <span className="color-meta">{selected ? 'Selected' : 'Tap to choose'}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-                <div className="room-status">
-                  <span>
-                    Players joined: {Math.min(joinedPlayers, playerCount)}/{playerCount}
-                  </span>
-                </div>
                 <div className="setup-actions">
-                  <button className="btn" onClick={() => setSetupStep('settings')}>
-                    Continue
+                  <button
+                    className="btn"
+                    onClick={startP2pHost}
+                    disabled={p2pStatus !== 'idle' && p2pStatus !== 'error'}
+                  >
+                    Create Room
                   </button>
                   <button className="btn ghost" onClick={handleBackToMode}>
                     Back
                   </button>
                 </div>
+                {roomCode ? (
+                  <div className="room-card">
+                    <span className="room-label">Room</span>
+                    <div className="setup-note">
+                      Display code: <strong>{shortDisplayCodeFromLong(roomCode)}</strong>
+                      <br />
+                      Status: {p2pStatus.replaceAll('_', ' ')}
+                    </div>
+                    <div className="setup-actions">
+                      <button
+                        className="btn ghost"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(roomCode)
+                            toast.success('Room code copied.')
+                          } catch {
+                            toast.info('Copy failed. Select and copy manually.')
+                          }
+                        }}
+                      >
+                        Copy Code
+                      </button>
+                      <button
+                        className="btn ghost"
+                        onClick={async () => {
+                          const url =
+                            typeof window !== 'undefined'
+                              ? `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(roomCode)}`
+                              : roomCode
+                          const text = url
+                          try {
+                            if (navigator.share) {
+                              await navigator.share({ text })
+                              return
+                            }
+                          } catch {
+                            // fallback to copy
+                          }
+                          try {
+                            await navigator.clipboard.writeText(text)
+                            toast.success('Link copied.')
+                          } catch {
+                            toast.info('Share/copy not supported on this device.')
+                          }
+                        }}
+                      >
+                        Share Link
+                      </button>
+                      <button className="btn ghost" type="button" onClick={() => setShowFullRoomCode((v) => !v)}>
+                        {showFullRoomCode ? 'Hide Full Code' : 'Show Full Code'}
+                      </button>
+                    </div>
+                    {showFullRoomCode ? (
+                      <label style={{ display: 'block', marginTop: 8 }}>
+                        Full room code
+                        <textarea
+                          value={formatGroupedCode(roomCode)}
+                          readOnly
+                          rows={5}
+                          style={{ width: '100%', marginTop: 6, fontFamily: 'monospace' }}
+                        />
+                      </label>
+                    ) : null}
+                    <div className="setup-actions">
+                      <div className="room-card" style={{ padding: 12 }}>
+                        <span className="room-label">QR</span>
+                        <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 10 }}>
+                          <QRCodeCanvas
+                            value={
+                              typeof window !== 'undefined'
+                                ? `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(roomCode)}`
+                                : roomCode
+                            }
+                            size={180}
+                            includeMargin
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="setup-actions">
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={() => setShowHostJoinPaste((v) => !v)}
+                      >
+                        {showHostJoinPaste ? 'Hide Join Code' : 'I have a join code'}
+                      </button>
+                    </div>
+                    {showHostJoinPaste ? (
+                      <div className="room-join">
+                        <label>
+                          Join code (from friend)
+                          <textarea
+                            value={joinCode}
+                            onChange={(e) => setJoinCode(e.target.value)}
+                            placeholder="Paste the join code here"
+                            rows={5}
+                            style={{ width: '100%', marginTop: 6, fontFamily: 'monospace' }}
+                          />
+                        </label>
+                        <div className="setup-actions">
+                          <button
+                            className="btn"
+                            onClick={acceptP2pAnswer}
+                            disabled={!joinCode.trim() || p2pStatus === 'connected'}
+                          >
+                            Connect
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="setup-note">
+                  Status: {p2pStatus}
+                  {p2pStatus === 'connected' ? (
+                    <>
+                      <br />
+                      You are <strong>Green</strong>.
+                    </>
+                  ) : null}
+                </div>
               </>
             ) : null}
 
-            {setupStep === 'join' ? (
+            {setupStep === 'p2p_join' ? (
               <>
-                <h1>Join Room</h1>
-                <p>Enter the room code shared by your friend.</p>
+                <h1>Multiplayer (Join)</h1>
+                <p>Paste your friend&apos;s room code, then generate a join code to send back.</p>
                 <div className="room-join">
                   <label>
                     Your name
@@ -1381,135 +1790,192 @@ function App() {
                   </label>
                   <label>
                     Room code
-                    <input
-                      type="text"
-                      value={joinCode}
-                      onChange={(e) => {
-                        const cleaned = e.target.value
-                          .toUpperCase()
-                          .replace(/[^A-Z0-9]/g, '')
-                          .slice(0, 6)
-                        setJoinCode(cleaned)
-                        setJoinStatus('idle')
-                      }}
-                      placeholder="Enter code"
+                    <textarea
+                      value={roomCodeInput}
+                      onChange={(e) => setRoomCodeInput(e.target.value)}
+                      placeholder="Paste room code here"
+                      rows={5}
+                      style={{ width: '100%', marginTop: 6, fontFamily: 'monospace' }}
+                      inputMode="text"
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      spellCheck={false}
                     />
                   </label>
-                  <button className="btn" onClick={handleJoinRoom} disabled={joinStatus === 'loading'}>
-                    {joinStatus === 'loading' ? 'Joining...' : 'Join Room'}
-                  </button>
-                </div>
-                <div className="color-grid">
-                  {availableColors.map((color) => {
-                    const selected = myColor === color
-                    return (
-                      <button
-                        key={color}
-                        type="button"
-                        className={`color-card ${color} ${selected ? 'selected' : ''}`}
-                        onClick={() => setMyColor(color)}
-                      >
-                        <span className={`color-token ${color}`} />
-                        <strong>{COLOR_NAMES[color]}</strong>
-                        <span className="color-meta">{selected ? 'Selected' : 'Tap to choose'}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-                <div className="join-status">
-                  {joinStatus === 'loading' ? (
-                    <>
-                      <span className="loader" />
-                      <span>Verifying code, please wait...</span>
-                    </>
-                  ) : null}
-                  {joinStatus === 'success' ? <span>Room joined. Waiting to start...</span> : null}
-                  {joinStatus === 'error' ? (
-                    <span className="error-text">Invalid code. Check and try again.</span>
-                  ) : null}
                 </div>
                 <div className="setup-actions">
+                  <button
+                    className="btn"
+                    onClick={startP2pGuest}
+                    disabled={!roomCodeInput.trim() || (p2pStatus !== 'idle' && p2pStatus !== 'error')}
+                  >
+                    Generate Join Code
+                  </button>
                   <button className="btn ghost" onClick={handleBackToMode}>
                     Back
                   </button>
+                </div>
+                {joinCode && p2pStatus === 'answer_ready' ? (
+                  <div className="room-card">
+                    <span className="room-label">Join Code</span>
+                    <div className="setup-note">
+                      Display code: <strong>{shortDisplayCodeFromLong(joinCode)}</strong>
+                      <br />
+                      Send the full join code back to the host.
+                    </div>
+                    <div className="setup-actions">
+                      <button
+                        className="btn ghost"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(joinCode)
+                            toast.success('Join code copied.')
+                          } catch {
+                            toast.info('Copy failed. Select and copy manually.')
+                          }
+                        }}
+                      >
+                        Copy Code
+                      </button>
+                      <button
+                        className="btn ghost"
+                        onClick={async () => {
+                          const text = joinCode
+                          try {
+                            if (navigator.share) {
+                              await navigator.share({ text })
+                              return
+                            }
+                          } catch {
+                            // fallback to copy
+                          }
+                          try {
+                            await navigator.clipboard.writeText(text)
+                            toast.success('Join code copied.')
+                          } catch {
+                            toast.info('Share/copy not supported on this device.')
+                          }
+                        }}
+                      >
+                        Share
+                      </button>
+                      <button className="btn ghost" type="button" onClick={() => setShowFullJoinCode((v) => !v)}>
+                        {showFullJoinCode ? 'Hide Full Code' : 'Show Full Code'}
+                      </button>
+                    </div>
+                    {showFullJoinCode ? (
+                      <label style={{ display: 'block', marginTop: 8 }}>
+                        Full join code
+                        <textarea
+                          value={formatGroupedCode(joinCode)}
+                          readOnly
+                          rows={5}
+                          style={{ width: '100%', marginTop: 6, fontFamily: 'monospace' }}
+                        />
+                      </label>
+                    ) : null}
+                    <div className="setup-actions">
+                      <div className="room-card" style={{ padding: 12 }}>
+                        <span className="room-label">QR</span>
+                        <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 10 }}>
+                          <QRCodeCanvas value={joinCode} size={180} includeMargin />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+                <div className="setup-note">
+                  Status: {p2pStatus}
+                  {p2pStatus === 'connected' ? (
+                    <>
+                      <br />
+                      You are <strong>Red</strong>.
+                    </>
+                  ) : null}
                 </div>
               </>
             ) : null}
 
             {setupStep === 'settings' ? (
               <>
-                <h1>Choose Players & Colors</h1>
+                <h1>{playMode === 'p2p' ? 'Multiplayer Setup' : 'Choose Players & Colors'}</h1>
                 <p>
-                  {playMode === 'room'
-                    ? 'Room player count is locked. Choose colors.'
+                  {playMode === 'p2p'
+                    ? 'Connected P2P. Each player can edit only their own name.'
                     : 'Select player count, then choose colors.'}
                 </p>
-                <div className="player-count">
-                  {[2, 3, 4].map((count) => (
-                    <button
-                      key={count}
-                      type="button"
-                      className={`count-chip ${playerCount === count ? 'active' : ''}`}
-                      onClick={() => {
-                        if (playMode === 'room') return
-                        setPlayerCount(count)
-                      }}
-                      disabled={playMode === 'room'}
-                    >
-                      {count} Players
-                    </button>
-                  ))}
-                </div>
-                <div className="color-grid">
-                  {COLOR_ORDER.map((color) => {
-                    const selected = selectedColors.includes(color)
-                    const disabled = !availableColors.includes(color)
-                    return (
-                      <button
-                        key={color}
-                        type="button"
-                        className={`color-card ${color} ${selected ? 'selected' : ''} ${
-                          disabled ? 'disabled' : ''
-                        }`}
-                        onClick={() => toggleColor(color)}
-                        disabled={disabled}
-                      >
-                        <span className={`color-token ${color}`} />
-                        <strong>{COLOR_NAMES[color]}</strong>
-                        <span className="color-meta">
-                          {selected ? 'Selected' : disabled ? 'Unavailable' : 'Tap to add'}
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
+                {playMode === 'p2p' ? (
+                  <div className="setup-note">
+                    Your color: <strong>{localColor === 'green' ? 'Green' : 'Red'}</strong>
+                    <br />
+                    Connection: {p2pStatus.replaceAll('_', ' ')}
+                  </div>
+                ) : (
+                  <>
+                    <div className="player-count">
+                      {[2, 3, 4].map((count) => (
+                        <button
+                          key={count}
+                          type="button"
+                          className={`count-chip ${playerCount === count ? 'active' : ''}`}
+                          onClick={() => setPlayerCount(count)}
+                        >
+                          {count} Players
+                        </button>
+                      ))}
+                    </div>
+                    <div className="color-grid">
+                      {COLOR_ORDER.map((color) => {
+                        const selected = selectedColors.includes(color)
+                        const disabled = !availableColors.includes(color)
+                        return (
+                          <button
+                            key={color}
+                            type="button"
+                            className={`color-card ${color} ${selected ? 'selected' : ''} ${
+                              disabled ? 'disabled' : ''
+                            }`}
+                            onClick={() => toggleColor(color)}
+                            disabled={disabled}
+                          >
+                            <span className={`color-token ${color}`} />
+                            <strong>{COLOR_NAMES[color]}</strong>
+                            <span className="color-meta">
+                              {selected ? 'Selected' : disabled ? 'Unavailable' : 'Tap to add'}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
                 <div className="name-list">
                   {activeColors.map((color, idx) => (
                     <label
                       key={color}
-                      className={`name-row ${
-                        playMode === 'room' && myColor !== color ? 'locked' : ''
-                      }`}
+                      className="name-row"
                     >
                       <span className={`legend-dot ${color}`} />
                       <span className="name-label">Player {idx + 1}</span>
                       <input
                         type="text"
                         value={playerNames[color] || `Player ${idx + 1}`}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          const nextName = e.target.value
                           setPlayerNames((prev) => ({
                             ...prev,
-                            [color]: e.target.value,
+                            [color]: nextName,
                           }))
-                        }
+                          if (playMode === 'p2p' && isP2pConnected && !isHost && color === localColor) {
+                            sendP2pJson({ t: 'action', a: 'set_name', p: { name: nextName } })
+                          }
+                        }}
                         placeholder="Enter name"
-                        disabled={playMode === 'room' && myColor !== color}
+                        disabled={playMode === 'p2p' ? color !== localColor : false}
                       />
-                      {playMode === 'room' && myColor !== color ? (
-                        <span className="name-lock">Locked</span>
-                      ) : (
-                        <span className="name-lock editable">Editable</span>
-                      )}
+                      <span className="name-lock editable">
+                        {playMode === 'p2p' && color !== localColor ? 'Locked' : 'Editable'}
+                      </span>
                     </label>
                   ))}
                 </div>
@@ -1519,39 +1985,28 @@ function App() {
                     onClick={startGame}
                     disabled={
                       activeColors.length !== playerCount ||
-                      (playMode === 'room' &&
-                        !(
-                          joinedPlayers >= playerCount ||
-                          (playerCount === 4 && joinedPlayers === 3)
-                        ))
+                      (playMode === 'p2p' && (!isHost || !isP2pConnected))
                     }
                   >
-                    Start Game
+                    {playMode === 'p2p' && !isHost ? 'Waiting for host…' : 'Start Game'}
                   </button>
-                  <button
-                    className="btn ghost"
-                    onClick={() => setSelectedColors(COLOR_ORDER.slice(0, playerCount))}
-                  >
-                    Select {playerCount}
-                  </button>
+                  {playMode !== 'p2p' ? (
+                    <button
+                      className="btn ghost"
+                      onClick={() => setSelectedColors(COLOR_ORDER.slice(0, playerCount))}
+                    >
+                      Select {playerCount}
+                    </button>
+                  ) : null}
                   <button
                     className="btn ghost"
                     onClick={() => {
-                      if (playMode === 'room') {
-                        setSetupStep('create')
-                      } else {
-                        handleBackToMode()
-                      }
+                      handleBackToMode()
                     }}
                   >
-                    Back
+                    {playMode === 'p2p' ? 'Disconnect' : 'Back'}
                   </button>
                 </div>
-                {playMode === 'room' ? (
-                  <div className="setup-note">
-                    Waiting for players: {Math.min(joinedPlayers, playerCount)}/{playerCount}
-                  </div>
-                ) : null}
                 <div className="setup-note">
                   Players: {playerCount}
                   <br />
@@ -1570,31 +2025,27 @@ function App() {
               </>
             ) : null}
           </div>
-          <div className="setup-card tip-card">
-            <h2>How to Play</h2>
-            <ul>
-              <li>Play with 2, 3, or 4 players.</li>
-              <li>Roll a 6 to leave base.</li>
-              <li>Landing on an enemy sends it back (except safe starts).</li>
-              <li>You cannot jump over an enemy coin.</li>
-              <li>Capture at least one coin before entering the home path.</li>
-              <li>Rolling a 6 gives an extra roll.</li>
-              <li>Choose mode lets you pick the move number.</li>
-              <li>In room mode, 4 players can start with 3 and a bot joins.</li>
-            </ul>
-          </div>
-          <div className="setup-card rules-card">
-            <h2>Rules Summary</h2>
-            <ul>
-              <li>Only the selected player count can join a room.</li>
-              <li>Players pick their own color in room mode.</li>
-              <li>Player names are editable only by that player.</li>
-              <li>Captured coins return to base.</li>
-              <li>No jumping over enemy coins on the track.</li>
-              <li>Capture required before entering home path.</li>
-              <li>Extra turn on rolling a 6.</li>
-            </ul>
-          </div>
+            <div className="setup-card tip-card">
+              <h2>How to Play</h2>
+              <ul>
+                <li>Play with 2, 3, or 4 players.</li>
+                <li>Roll a 6 to leave base.</li>
+                <li>Landing on an enemy sends it back (except safe starts).</li>
+                <li>You cannot jump over an enemy coin.</li>
+                <li>Capture at least one coin before entering the home path.</li>
+                <li>Rolling a 6 gives an extra roll.</li>
+                <li>Choose mode lets you pick the move number.</li>
+              </ul>
+            </div>
+            <div className="setup-card rules-card">
+              <h2>Rules Summary</h2>
+              <ul>
+                <li>Captured coins return to base.</li>
+                <li>No jumping over enemy coins on the track.</li>
+                <li>Capture required before entering home path.</li>
+                <li>Extra turn on rolling a 6.</li>
+              </ul>
+            </div>
         </div>
       ) : (
         <>
@@ -1695,6 +2146,47 @@ function App() {
                     {isRolling ? 'Rolling...' : 'Roll'}
                   </button>
                 </div>
+                <div className="mode-toggle">
+                  <button
+                    type="button"
+                    className={`btn ${moveMode === 'roll' ? 'active' : ''}`}
+                    onClick={() => setMoveModeSafe('roll')}
+                    disabled={
+                      phase !== 'playing' || gameOver || isAnimating || isRolling || hasRolled
+                    }
+                  >
+                    Roll Mode
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn ${moveMode === 'choose' ? 'active' : ''}`}
+                    onClick={() => setMoveModeSafe('choose')}
+                    disabled={
+                      phase !== 'playing' || gameOver || isAnimating || isRolling || hasRolled
+                    }
+                  >
+                    Choose Mode
+                  </button>
+                </div>
+                {moveMode === 'choose' ? (
+                  <div className="choose-row">
+                    {[1, 2, 3, 4, 5, 6].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={`choose-chip ${current.color} ${
+                          selectedMove === value ? 'selected' : ''
+                        }`}
+                        onClick={() => chooseMove(value)}
+                        disabled={
+                          phase !== 'playing' || hasRolled || gameOver || isAnimating || isRolling
+                        }
+                      >
+                        {value}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="turn">
                   <span className={`turn-indicator ${current.color}`} />
                   <div>
@@ -1702,51 +2194,44 @@ function App() {
                     <p className="turn-message">{message}</p>
                   </div>
                 </div>
-                {playMode === 'room' ? (
-                  <div className="room-pill">
-                    Players joined: {Math.min(joinedPlayers, playerCount)}/{playerCount}
-                  </div>
-                ) : null}
                 <div className="setup-actions">
                   <button className="btn ghost" onClick={handleBackToSetup}>
                     Back to Setup
                   </button>
                 </div>
               </div>
-              {playMode === 'room' ? (
-                <div className="panel-card chat-panel">
-                  <h2>Chat</h2>
-                  <div className="chat-window">
-                    {chatMessages.length === 0 ? (
-                      <p className="chat-empty">Say hello to start the chat.</p>
-                    ) : (
-                      chatMessages.map((msg) => (
-                        <div key={msg.id} className="chat-msg">
-                          <div className="chat-meta">
-                            <strong>{msg.name}</strong>
-                            <span>{msg.at}</span>
-                          </div>
-                          <div className="chat-text">{msg.text}</div>
+              <div className="panel-card chat-panel">
+                <h2>Chat</h2>
+                <div className="chat-window">
+                  {chatMessages.length === 0 ? (
+                    <p className="chat-empty">Say hello to start the chat.</p>
+                  ) : (
+                    chatMessages.map((msg) => (
+                      <div key={msg.id} className="chat-msg">
+                        <div className="chat-meta">
+                          <strong>{msg.name}</strong>
+                          <span>{msg.at}</span>
                         </div>
-                      ))
-                    )}
-                  </div>
-                  <div className="chat-input">
-                    <input
-                      type="text"
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      placeholder="Type a message..."
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') sendChat()
-                      }}
-                    />
-                    <button className="btn" onClick={sendChat}>
-                      Send
-                    </button>
-                  </div>
+                        <div className="chat-text">{msg.text}</div>
+                      </div>
+                    ))
+                  )}
                 </div>
-              ) : null}
+                <div className="chat-input">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="Type a message..."
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') sendChat()
+                    }}
+                  />
+                  <button className="btn" onClick={sendChat}>
+                    Send
+                  </button>
+                </div>
+              </div>
             </aside>
           </main>
         </>
