@@ -1,23 +1,23 @@
 🎮 Ludo
 
-A fun and interactive Ludo game built to feel smooth, simple, and enjoyable.
+A fun and interactive Ludo game built to feel smooth, simple, and enjoyable. Play locally with 2-4 players on the same device.
 
 🚀 Features
-Smooth turn-based gameplay
-Clean and easy-to-use UI
-Sound effects for better experience 🎲
-Fair gameplay with basic rules
+- Smooth turn-based gameplay for 2-4 players
+- Clean and easy-to-use UI
+- Sound effects for better experience 🎲
+- Fair gameplay with basic rules
+- Local multiplayer on the same device
 
-Multiplayer (frontend-only)
-- Uses WebRTC P2P (peer-to-peer) DataChannel.
-- Host shares a long Room Code (or QR). Joiner sends back a long Join Code (or QR) to connect.
-💡 What Makes It Cool
-Feels like a real board game experience
-Small details like sounds make it more engaging
 ✅ Status
+- Local play is fully functional.
+- Supports 2, 3, or 4 players on the same device.
 
-Local play is working.
+🚀 Getting Started
 
-Run locally:
 1. `npm install`
 2. `npm run dev`
+3. Open your browser and play!
+
+Build for Production:
+- `npm run build`
