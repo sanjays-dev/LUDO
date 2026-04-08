@@ -1192,6 +1192,15 @@
   }
 }
 
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-20px);
+  }
+}
+
 .player-count {
   display: flex;
   gap: 10px;

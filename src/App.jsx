@@ -300,7 +300,7 @@ function getTrackIndicesBetween(color, fromSteps, moveValue) {
 
 function App() {
   const [phase, setPhase] = useState('setup') // setup | playing
-  const [setupStep, setSetupStep] = useState('mode') // mode | settings
+  const [setupStep, setSetupStep] = useState('entry') // entry | mode | settings | ready
   const [playMode, setPlayMode] = useState(null) // local | p2p
   const [playerCount, setPlayerCount] = useState(4)
   const [selectedColors, setSelectedColors] = useState(() => [...COLOR_ORDER])
@@ -1606,6 +1606,45 @@ function App() {
       {phase === 'setup' ? (
         <div className="setup">
           <div className="setup-card">
+            {setupStep === 'entry' ? (
+              <>
+                <div style={{ textAlign: 'center', marginBottom: '40px' }}>
+                  <div style={{
+                    fontSize: '80px',
+                    marginBottom: '20px',
+                    animation: 'bounce 2s infinite',
+                  }}>
+                    🎲
+                  </div>
+                </div>
+                <h1>Enter Ludo</h1>
+                <p>The classic board game for 2-4 players.</p>
+                <div className="mode-grid">
+                  <button
+                    className="mode-card"
+                    type="button"
+                    onClick={() => setSetupStep('mode')}
+                    style={{
+                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      border: 'none',
+                      cursor: 'pointer',
+                      transition: 'transform 0.2s, box-shadow 0.2s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.target.style.transform = 'scale(1.05)'
+                      e.target.style.boxShadow = '0 8px 20px rgba(102, 126, 234, 0.4)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.transform = 'scale(1)'
+                      e.target.style.boxShadow = 'none'
+                    }}
+                  >
+                    <strong>Enter to Ludo world</strong>
+                  </button>
+                </div>
+              </>
+            ) : null}
+
             {setupStep === 'mode' ? (
               <>
                 <h1>Ludo</h1>
@@ -1709,13 +1748,13 @@ function App() {
                 <div className="setup-actions">
                   <button
                     className="btn"
-                    onClick={startGame}
+                    onClick={() => setSetupStep('ready')}
                     disabled={
                       activeColors.length !== playerCount ||
                       (playMode === 'p2p' && (!isHost || !isP2pConnected))
                     }
                   >
-                    {playMode === 'p2p' && !isHost ? 'Waiting for host…' : 'Start Game'}
+                    {playMode === 'p2p' && !isHost ? 'Waiting for host…' : 'Continue'}
                   </button>
                   {playMode !== 'p2p' ? (
                     <button
@@ -1748,6 +1787,37 @@ function App() {
                       </span>
                     </div>
                   ))}
+                </div>
+              </>
+            ) : null}
+
+            {setupStep === 'ready' ? (
+              <>
+                <h1>Ready to Start?</h1>
+                <p>Here are your players:</p>
+                <div className="player-legend" style={{ marginBottom: '24px' }}>
+                  {activeColors.map((color, idx) => (
+                    <div key={color} className="legend-row" style={{ fontSize: '16px', padding: '12px' }}>
+                      <span className={`legend-dot ${color}`} />
+                      <span>
+                        <strong>Player {idx + 1}: {playerNames[color] || COLOR_NAMES[color]}</strong>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="setup-actions">
+                  <button
+                    className="btn"
+                    onClick={startGame}
+                  >
+                    Start Game
+                  </button>
+                  <button
+                    className="btn ghost"
+                    onClick={() => setSetupStep('settings')}
+                  >
+                    Back
+                  </button>
                 </div>
               </>
             ) : null}
