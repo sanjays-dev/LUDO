@@ -1,23 +1,20 @@
-🎮 Ludo
+# Ludo
 
-A fun and interactive Ludo game built to feel smooth, simple, and enjoyable. Play locally with 2-4 players on the same device.
+A fun and interactive Ludo game with local and online room-code multiplayer.
 
-🚀 Features
-- Smooth turn-based gameplay for 2-4 players
-- Clean and easy-to-use UI
-- Sound effects for better experience 🎲
-- Fair gameplay with basic rules
-- Local multiplayer on the same device
+## Features
+- Smooth turn-based gameplay for 2-4 players (local mode)
+- Online mode with room code flow:
+  - Host creates room code
+  - Guest joins using room code
+  - Host and guest connect directly in the room
+- In-game chat in online mode
+- Sound effects and polished UI
 
-✅ Status
-- Local play is fully functional.
-- Supports 2, 3, or 4 players on the same device.
-
-🚀 Getting Started
-
+## Getting Started
 1. `npm install`
 2. `npm run dev`
-3. Open your browser and play!
+3. Open your browser and play
 
-Build for Production:
+Build for production:
 - `npm run build`
