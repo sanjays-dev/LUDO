@@ -198,8 +198,6 @@ function sanitizeRoomCode(input) {
   const normalized = String(input || '')
     .toUpperCase()
     .replaceAll(/\s+/g, '')
-    // Common visual confusion: users often type O/0 for Q in shared codes.
-    .replaceAll(/[O0]/g, 'Q')
     .replaceAll(/[^A-Z0-9]/g, '')
   const filtered = normalized
     .split('')
@@ -766,14 +764,14 @@ function App() {
     setPlayMode(null)
   }
 
-  function createHostPeer(maxAttempts = 5) {
+function createHostPeer(maxAttempts = 5) {
     const attemptCreate = (attempt) =>
       new Promise((resolve, reject) => {
         const candidateCode = generateRoomCode()
         const peer = new Peer(candidateCode)
         const onOpen = (id) => {
           peer.off('error', onError)
-          resolve({ peer, roomCode: sanitizeRoomCode(id) || candidateCode })
+          resolve({ peer, roomCode: String(id || candidateCode).trim() || candidateCode })
         }
         const onError = (err) => {
           peer.off('open', onOpen)
@@ -833,7 +831,10 @@ function App() {
       [peerId]: assignedColor,
     }
     setLobbyVersion((prev) => prev + 1)
-    connection.on('open', () => {
+    let didInitConnection = false
+    const handleConnectionReady = () => {
+      if (didInitConnection) return
+      didInitConnection = true
       setP2pStatus('connected')
       toast.success(`${COLOR_NAMES[assignedColor]} joined your room.`)
       setSetupStep('settings')
@@ -845,7 +846,11 @@ function App() {
       })
       connection.send({ t: 'hello', name: myName?.trim() || 'Host' })
       connection.send({ t: 'state', s: getP2pStateSnapshot() })
-    })
+    }
+    connection.on('open', handleConnectionReady)
+    if (connection.open) {
+      handleConnectionReady()
+    }
     connection.on('close', () => {
       const nextConnections = { ...hostConnectionsRef.current }
       delete nextConnections[peerId]
