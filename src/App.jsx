@@ -406,7 +406,10 @@ function App() {
     (isHost
       ? Object.values(hostConnectionsRef.current || {}).some((conn) => Boolean(conn?.open))
       : Boolean(connectionRef.current?.open))
-  const localColor = playMode === 'p2p' ? myOnlineColor : null
+  const localColor =
+    playMode === 'p2p'
+      ? myOnlineColor || (playerCount === 2 ? (isHost ? P2P_HOST_COLOR : P2P_GUEST_COLOR) : null)
+      : null
 
   function sendP2pJson(payload) {
     if (isHost) {
@@ -1392,7 +1395,7 @@ function createHostPeer(maxAttempts = 5) {
     if (!currentTurn) return
     if (playMode === 'p2p' && isP2pConnected) {
       if (source === 'local') {
-        if (!myOnlineColor || currentTurn.id !== myOnlineColor) {
+        if (!localColor || currentTurn.id !== localColor) {
           toast.info(`Waiting for ${currentTurn.name} to roll.`)
           return
         }
@@ -1596,7 +1599,7 @@ function createHostPeer(maxAttempts = 5) {
     if (!currentTurn) return
     if (playMode === 'p2p' && isP2pConnected) {
       if (source === 'local') {
-        if (!myOnlineColor || currentTurn.id !== myOnlineColor) return
+        if (!localColor || currentTurn.id !== localColor) return
         if (!isHost) {
           sendP2pJson({ t: 'action', a: 'move', p: { tokenId } })
           return
@@ -1780,12 +1783,12 @@ function createHostPeer(maxAttempts = 5) {
     playersRef.current.find((player) => player.color === currentTurnColorRef.current) ||
     playersRef.current[currentTurnIndex] ||
     players[currentPlayer]
-  const isMyColor = (color) => Boolean(playMode === 'p2p' && myOnlineColor && color === myOnlineColor)
+  const isMyColor = (color) => Boolean(playMode === 'p2p' && localColor && color === localColor)
   const activeTurnColorForUi = currentTurnColorRef.current || current?.color || null
   const isOnlineTurnMine =
     playMode !== 'p2p'
       ? true
-      : Boolean(myOnlineColor && activeTurnColorForUi && myOnlineColor === activeTurnColorForUi)
+      : Boolean(localColor && activeTurnColorForUi && localColor === activeTurnColorForUi)
   const canRollInCurrentContext =
     playMode !== 'p2p' || !isP2pConnected ? true : isOnlineTurnMine
   const hasPendingRollValue = (lastRoll ?? dice) !== null
