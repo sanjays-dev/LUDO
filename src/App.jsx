@@ -504,6 +504,10 @@ function App() {
 
   function sendImmediateP2pState(overrides = {}) {
     if (!isHost || !isP2pConnected) return
+    if (p2pSendTimerRef.current) {
+      clearTimeout(p2pSendTimerRef.current)
+      p2pSendTimerRef.current = null
+    }
     sendP2pJson({
       t: 'state',
       s: {
@@ -515,7 +519,10 @@ function App() {
 
   function scheduleP2pStateSync() {
     if (!isHost || !isP2pConnected) return
-    if (p2pSendTimerRef.current) return
+    if (p2pSendTimerRef.current) {
+      clearTimeout(p2pSendTimerRef.current)
+      p2pSendTimerRef.current = null
+    }
     p2pSendTimerRef.current = setTimeout(() => {
       p2pSendTimerRef.current = null
       sendP2pJson({
