@@ -152,6 +152,10 @@ function getAvailableColorsForCount(count) {
   return COLOR_ORDER
 }
 
+function getTwoPlayerTurnColorByIndex(index) {
+  return index % 2 === 0 ? P2P_HOST_COLOR : P2P_GUEST_COLOR
+}
+
 function formatGroupedCode(code, groupSize = 3, groupsPerLine = 2) {
   const raw = String(code || '').trim().replace(/\s+/g, '')
   if (!raw) return ''
@@ -303,6 +307,7 @@ function App() {
   const gameOverRef = useRef(gameOver)
   const currentPlayerRef = useRef(currentPlayer)
   const currentTurnColorRef = useRef(currentTurnColor)
+  const turnMarkerRef = useRef('')
   const playerCountRef = useRef(playerCount)
   const diceVisibleUntilRef = useRef(0)
   const diceClearTimerRef = useRef(null)
@@ -386,6 +391,22 @@ function App() {
   useEffect(() => {
     currentTurnColorRef.current = currentTurnColor
   }, [currentTurnColor])
+
+  useEffect(() => {
+    const resolvedTurnColor = currentTurnColor || players[currentPlayer]?.color || null
+    if (!resolvedTurnColor) return
+    const marker = `${phase}:${resolvedTurnColor}`
+    if (turnMarkerRef.current === marker) return
+    turnMarkerRef.current = marker
+    if (phase === 'playing') {
+      setHasRolled(false)
+      setIsRolling(false)
+      setRollingValue(null)
+      setLastRoll(null)
+      setDice(null)
+      setSelectedMove(null)
+    }
+  }, [phase, currentTurnColor, currentPlayer, players])
 
   useEffect(() => {
     currentPlayerRef.current = currentPlayer
@@ -589,11 +610,19 @@ function App() {
     if (typeof next.currentTurnColor === 'string') {
       currentTurnColorRef.current = next.currentTurnColor
       setCurrentTurnColor(next.currentTurnColor)
-    } else if (typeof next.currentPlayer === 'number' && Array.isArray(next.players)) {
-      const fallbackTurnColor = next.players[next.currentPlayer]?.color || null
-      if (fallbackTurnColor) {
-        currentTurnColorRef.current = fallbackTurnColor
-        setCurrentTurnColor(fallbackTurnColor)
+    } else if (typeof next.currentPlayer === 'number') {
+      const fallbackTurnColor =
+        (Array.isArray(next.players)
+          ? next.players[next.currentPlayer]?.color
+          : playersRef.current[next.currentPlayer]?.color) || null
+      const resolvedTurnColor =
+        fallbackTurnColor ||
+        ((next.playerCount || playerCountRef.current) === 2
+          ? getTwoPlayerTurnColorByIndex(next.currentPlayer)
+          : null)
+      if (resolvedTurnColor) {
+        currentTurnColorRef.current = resolvedTurnColor
+        setCurrentTurnColor(resolvedTurnColor)
       }
     }
     if (typeof next.moveMode === 'string') {
@@ -926,8 +955,9 @@ function createHostPeer(maxAttempts = 5) {
           return
         }
         if (phaseRef.current !== 'playing') return
-        const currentTurn = playersRef.current[currentPlayerRef.current]
-        if (!currentTurn || currentTurn.id !== assignedColor) return
+        const activeTurnColor =
+          currentTurnColorRef.current || playersRef.current[currentPlayerRef.current]?.color || null
+        if (!activeTurnColor || activeTurnColor !== assignedColor) return
         if (action === 'roll') {
           rollDiceRef.current?.('remote', assignedColor)
           return
@@ -1779,12 +1809,14 @@ function createHostPeer(maxAttempts = 5) {
     })
   }, [playerCount, playerNames, myName, lobbyVersion])
   const currentTurnIndex = currentPlayerRef.current
+  const twoPlayerTurnColorFallback =
+    playerCount === 2 ? getTwoPlayerTurnColorByIndex(currentTurnIndex) : null
   const current =
     playersRef.current.find((player) => player.color === currentTurnColorRef.current) ||
     playersRef.current[currentTurnIndex] ||
     players[currentPlayer]
   const isMyColor = (color) => Boolean(playMode === 'p2p' && localColor && color === localColor)
-  const activeTurnColorForUi = currentTurnColorRef.current || current?.color || null
+  const activeTurnColorForUi = currentTurnColorRef.current || current?.color || twoPlayerTurnColorFallback
   const isOnlineTurnMine =
     playMode !== 'p2p'
       ? true
