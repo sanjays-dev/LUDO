@@ -1175,7 +1175,7 @@ function createHostPeer(maxAttempts = 5) {
   }, [players])
 
   const movableTokenIds = useMemo(() => {
-    const hasPendingRollValue = (lastRoll ?? dice) !== null
+    const hasPendingRollValue = lastRoll !== null
     if (phase !== 'playing' || (!hasRolled && !hasPendingRollValue) || gameOver || isAnimating) return new Set()
     const activeTurnColor = currentTurnColor || players[currentPlayer]?.color || null
     const activeTurnIndex =
@@ -1184,7 +1184,7 @@ function createHostPeer(maxAttempts = 5) {
         : currentPlayer
     const player = players[activeTurnIndex]
     if (!player) return new Set()
-    const rollValue = lastRoll ?? dice
+    const rollValue = lastRoll
     if (!rollValue) return new Set()
     const hasCapture = Boolean(captureCredits[player.id])
     const enemyTrackIndices = new Set()
@@ -1408,7 +1408,7 @@ function createHostPeer(maxAttempts = 5) {
         if (!actorColor || currentTurn.id !== actorColor) return
       }
     }
-    const hasPendingRollValue = (lastRoll ?? dice) !== null
+    const hasPendingRollValue = lastRoll !== null
     const turnRollLocked = hasRolled && (isRolling || hasPendingRollValue)
     if (phase !== 'playing' || turnRollLocked || gameOver || isAnimating || isRolling)
       return
@@ -1609,12 +1609,12 @@ function createHostPeer(maxAttempts = 5) {
         if (!actorColor || currentTurn.id !== actorColor) return
       }
     }
-    const hasPendingRollValue = (lastRoll ?? dice) !== null
+    const hasPendingRollValue = lastRoll !== null
     if (phase !== 'playing' || (!hasRolled && !hasPendingRollValue) || gameOver || !movableTokenIds.has(tokenId))
       return
     if (animatingRef.current || isAnimating) return
 
-    const moveValue = lastRoll ?? dice
+    const moveValue = lastRoll
     if (!moveValue) return
 
     animatingRef.current = true
@@ -1791,7 +1791,7 @@ function createHostPeer(maxAttempts = 5) {
       : Boolean(localColor && activeTurnColorForUi && localColor === activeTurnColorForUi)
   const canRollInCurrentContext =
     playMode !== 'p2p' || !isP2pConnected ? true : isOnlineTurnMine
-  const hasPendingRollValue = (lastRoll ?? dice) !== null
+  const hasPendingRollValue = lastRoll !== null
   const turnRollLocked = hasRolled && (isRolling || hasPendingRollValue)
   const isTwoPlayer = phase === 'playing' && players.length === 2
 
