@@ -1293,6 +1293,7 @@ function createHostPeer(maxAttempts = 5) {
     setPlayers(createPlayers(colorsForGame, names, botByColor))
     setPhase('playing')
     phaseRef.current = 'playing'
+    currentPlayerRef.current = 0
     setCurrentPlayer(0)
     setDice(null)
     setLastRoll(null)
@@ -1314,9 +1315,10 @@ function createHostPeer(maxAttempts = 5) {
   }
 
   function rollDice(source = 'local', actorColor = null) {
+    const activeTurnIndex = currentPlayerRef.current
+    const currentTurn = playersRef.current[activeTurnIndex]
+    if (!currentTurn) return
     if (playMode === 'p2p' && isP2pConnected) {
-      const currentTurn = players[currentPlayer]
-      if (!currentTurn) return
       if (source === 'local') {
         if (!myOnlineColor || currentTurn.id !== myOnlineColor) {
           toast.info(`Waiting for ${currentTurn.name} to roll.`)
@@ -1342,11 +1344,11 @@ function createHostPeer(maxAttempts = 5) {
     setRollingValue(Math.floor(Math.random() * 6) + 1)
     playTone({ frequency: 540, type: 'triangle', duration: 0.14, volume: 0.12 })
 
-    const player = players[currentPlayer]
+    const player = playersRef.current[activeTurnIndex]
     const hasCapture = Boolean(captureCredits[player.id])
     const enemyTrackIndices = new Set()
-    players.forEach((p, idx) => {
-      if (idx === currentPlayer) return
+    playersRef.current.forEach((p, idx) => {
+      if (idx === activeTurnIndex) return
       p.tokens.forEach((t) => {
         if (t.steps >= 0 && t.steps < 52) {
           enemyTrackIndices.add(getTrackIndex(p.color, t.steps))
@@ -1398,7 +1400,7 @@ function createHostPeer(maxAttempts = 5) {
   })
 
   function advanceTurn(playersState) {
-    let next = currentPlayer
+    let next = currentPlayerRef.current
     const total = playersState.length
     let guard = 0
     do {
@@ -1420,6 +1422,7 @@ function createHostPeer(maxAttempts = 5) {
     if (isAnimating) return
     const colors = activeColors.length >= 2 ? activeColors : COLOR_ORDER
     setPlayers(createPlayers(colors, playerNames))
+    currentPlayerRef.current = 0
     setCurrentPlayer(0)
     setDice(null)
     setLastRoll(null)
@@ -1474,9 +1477,10 @@ function createHostPeer(maxAttempts = 5) {
   }
 
   async function handleMoveToken(tokenId, source = 'local', actorColor = null) {
+    const activeTurnIndex = currentPlayerRef.current
+    const currentTurn = playersRef.current[activeTurnIndex]
+    if (!currentTurn) return
     if (playMode === 'p2p' && isP2pConnected) {
-      const currentTurn = players[currentPlayer]
-      if (!currentTurn) return
       if (source === 'local') {
         if (!myOnlineColor || currentTurn.id !== myOnlineColor) return
         if (!isHost) {
@@ -1500,7 +1504,7 @@ function createHostPeer(maxAttempts = 5) {
     try {
       await animateTokenMove(tokenId, moveValue)
 
-      const movedPlayer = playersRef.current[currentPlayer]
+      const movedPlayer = playersRef.current[activeTurnIndex]
       const movedToken = movedPlayer.tokens.find((t) => t.id === tokenId)
 
       let updatedPlayers = playersRef.current
@@ -1509,7 +1513,7 @@ function createHostPeer(maxAttempts = 5) {
         const trackIndex = getTrackIndex(movedPlayer.color, movedToken.steps)
         if (!SAFE_INDICES.has(trackIndex)) {
           updatedPlayers = playersRef.current.map((opponent, oppIdx) => {
-            if (oppIdx === currentPlayer) return opponent
+            if (oppIdx === activeTurnIndex) return opponent
             return {
               ...opponent,
               tokens: opponent.tokens.map((token) => {
