@@ -495,6 +495,17 @@ function App() {
     }
   }
 
+  function sendImmediateP2pState(overrides = {}) {
+    if (!isHost || !isP2pConnected) return
+    sendP2pJson({
+      t: 'state',
+      s: {
+        ...getP2pStateSnapshot(),
+        ...overrides,
+      },
+    })
+  }
+
   function scheduleP2pStateSync() {
     if (!isHost || !isP2pConnected) return
     if (p2pSendTimerRef.current) return
@@ -848,7 +859,7 @@ function createHostPeer(maxAttempts = 5) {
         selectedColors: getAvailableColorsForCount(playerCountRef.current || 2),
       })
       connection.send({ t: 'hello', name: myName?.trim() || 'Host' })
-      connection.send({ t: 'state', s: getP2pStateSnapshot() })
+      sendImmediateP2pState()
     }
     connection.on('open', handleConnectionReady)
     if (connection.open) {
@@ -1312,6 +1323,23 @@ function createHostPeer(maxAttempts = 5) {
     setMessage(getTurnRollMessage(playerNames[colorsForGame[0]] || COLOR_NAMES[colorsForGame[0]]))
     toast.success('Game started!')
     playSfx('start')
+    sendImmediateP2pState({
+      phase: 'playing',
+      currentPlayer: 0,
+      currentTurnColor: colorsForGame[0],
+      dice: null,
+      lastRoll: null,
+      hasRolled: false,
+      isRolling: false,
+      rollingValue: null,
+      selectedMove: null,
+      message: getTurnRollMessage(playerNames[colorsForGame[0]] || COLOR_NAMES[colorsForGame[0]]),
+      finishedOrder: [],
+      eliminatedId: null,
+      showElimination: false,
+      capturedInfo: null,
+      gameOver: false,
+    })
   }
 
   function rollDice(source = 'local', actorColor = null) {
@@ -1411,11 +1439,24 @@ function createHostPeer(maxAttempts = 5) {
 
     currentPlayerRef.current = next
     setCurrentPlayer(next)
+    const nextPlayer = playersState[next]
     scheduleDiceClear()
     setLastRoll(null)
     setHasRolled(false)
     setSelectedMove(null)
-    setMessage(getTurnRollMessage(playersState[next].name))
+    const nextMessage = getTurnRollMessage(nextPlayer.name)
+    setMessage(nextMessage)
+    sendImmediateP2pState({
+      currentPlayer: next,
+      currentTurnColor: nextPlayer.color,
+      lastRoll: null,
+      hasRolled: false,
+      selectedMove: null,
+      message: nextMessage,
+      dice: null,
+      rollingValue: null,
+      isRolling: false,
+    })
   }
 
   function resetGame() {
@@ -1439,6 +1480,23 @@ function createHostPeer(maxAttempts = 5) {
     gameOverRef.current = false
     setMessage(getTurnRollMessage(playerNames[colors[0]] || COLOR_NAMES[colors[0]]))
     setSelectedMove(null)
+    sendImmediateP2pState({
+      phase: 'setup',
+      currentPlayer: 0,
+      currentTurnColor: colors[0],
+      dice: null,
+      lastRoll: null,
+      hasRolled: false,
+      isRolling: false,
+      rollingValue: null,
+      selectedMove: null,
+      finishedOrder: [],
+      eliminatedId: null,
+      showElimination: false,
+      capturedInfo: null,
+      gameOver: false,
+      message: getTurnRollMessage(playerNames[colors[0]] || COLOR_NAMES[colors[0]]),
+    })
   }
 
   function sleep(ms) {
