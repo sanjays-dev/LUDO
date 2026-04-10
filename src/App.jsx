@@ -285,6 +285,7 @@ function App() {
   const [showElimination, setShowElimination] = useState(false)
   const [capturedInfo, setCapturedInfo] = useState(null)
   const [gameOver, setGameOver] = useState(false)
+  const [currentTurnColor, setCurrentTurnColor] = useState(null)
   const [showTutorial, setShowTutorial] = useState(false)
   const [captureCredits, setCaptureCredits] = useState({})
   const [chatMessages, setChatMessages] = useState([])
@@ -301,6 +302,7 @@ function App() {
   const phaseRef = useRef(phase)
   const gameOverRef = useRef(gameOver)
   const currentPlayerRef = useRef(currentPlayer)
+  const currentTurnColorRef = useRef(currentTurnColor)
   const playerCountRef = useRef(playerCount)
   const diceVisibleUntilRef = useRef(0)
   const diceClearTimerRef = useRef(null)
@@ -380,6 +382,10 @@ function App() {
   useEffect(() => {
     gameOverRef.current = gameOver
   }, [gameOver])
+
+  useEffect(() => {
+    currentTurnColorRef.current = currentTurnColor
+  }, [currentTurnColor])
 
   useEffect(() => {
     currentPlayerRef.current = currentPlayer
@@ -483,6 +489,7 @@ function App() {
       hasRolled,
       isRolling,
       rollingValue,
+      currentTurnColor,
       moveMode,
       selectedMove,
       message,
@@ -529,6 +536,7 @@ function App() {
     playerNames,
     players,
     currentPlayer,
+    currentTurnColor,
     dice,
     lastRoll,
     hasRolled,
@@ -568,6 +576,10 @@ function App() {
     if (typeof next.hasRolled === 'boolean') setHasRolled(next.hasRolled)
     if (typeof next.isRolling === 'boolean') setIsRolling(next.isRolling)
     if (typeof next.rollingValue !== 'undefined') setRollingValue(next.rollingValue)
+    if (typeof next.currentTurnColor === 'string') {
+      currentTurnColorRef.current = next.currentTurnColor
+      setCurrentTurnColor(next.currentTurnColor)
+    }
     if (typeof next.moveMode === 'string') {
       // Roll mode is the only supported move mode in this UI.
     }
@@ -1305,6 +1317,8 @@ function createHostPeer(maxAttempts = 5) {
     setPhase('playing')
     phaseRef.current = 'playing'
     currentPlayerRef.current = 0
+    currentTurnColorRef.current = colorsForGame[0]
+    setCurrentTurnColor(colorsForGame[0])
     setCurrentPlayer(0)
     setDice(null)
     setLastRoll(null)
@@ -1344,7 +1358,10 @@ function createHostPeer(maxAttempts = 5) {
 
   function rollDice(source = 'local', actorColor = null) {
     const activeTurnIndex = currentPlayerRef.current
-    const currentTurn = playersRef.current[activeTurnIndex]
+    const turnColor = currentTurnColorRef.current || playersRef.current[activeTurnIndex]?.color || null
+    const currentTurn =
+      playersRef.current.find((player) => player.color === turnColor) ||
+      playersRef.current[activeTurnIndex]
     if (!currentTurn) return
     if (playMode === 'p2p' && isP2pConnected) {
       if (source === 'local') {
@@ -1440,6 +1457,8 @@ function createHostPeer(maxAttempts = 5) {
     currentPlayerRef.current = next
     setCurrentPlayer(next)
     const nextPlayer = playersState[next]
+    currentTurnColorRef.current = nextPlayer.color
+    setCurrentTurnColor(nextPlayer.color)
     scheduleDiceClear()
     setLastRoll(null)
     setHasRolled(false)
@@ -1478,6 +1497,8 @@ function createHostPeer(maxAttempts = 5) {
     setGameOver(false)
     finishedRef.current = []
     gameOverRef.current = false
+    currentTurnColorRef.current = colors[0]
+    setCurrentTurnColor(colors[0])
     setMessage(getTurnRollMessage(playerNames[colors[0]] || COLOR_NAMES[colors[0]]))
     setSelectedMove(null)
     sendImmediateP2pState({
@@ -1536,7 +1557,10 @@ function createHostPeer(maxAttempts = 5) {
 
   async function handleMoveToken(tokenId, source = 'local', actorColor = null) {
     const activeTurnIndex = currentPlayerRef.current
-    const currentTurn = playersRef.current[activeTurnIndex]
+    const turnColor = currentTurnColorRef.current || playersRef.current[activeTurnIndex]?.color || null
+    const currentTurn =
+      playersRef.current.find((player) => player.color === turnColor) ||
+      playersRef.current[activeTurnIndex]
     if (!currentTurn) return
     if (playMode === 'p2p' && isP2pConnected) {
       if (source === 'local') {
@@ -1719,7 +1743,10 @@ function createHostPeer(maxAttempts = 5) {
     })
   }, [playerCount, playerNames, myName, lobbyVersion])
   const currentTurnIndex = currentPlayerRef.current
-  const current = playersRef.current[currentTurnIndex] || players[currentPlayer]
+  const current =
+    playersRef.current.find((player) => player.color === currentTurnColorRef.current) ||
+    playersRef.current[currentTurnIndex] ||
+    players[currentPlayer]
   const isMyColor = (color) => Boolean(playMode === 'p2p' && myOnlineColor && color === myOnlineColor)
   const isOnlineTurnMine =
     playMode !== 'p2p' || !current ? true : Boolean(myOnlineColor && current.id === myOnlineColor)
