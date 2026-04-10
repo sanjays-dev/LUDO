@@ -478,18 +478,18 @@ function App() {
 
   function getP2pStateSnapshot() {
     return {
-      phase,
+      phase: phaseRef.current,
       playerCount,
       selectedColors,
       playerNames,
       players: playersRef.current,
-      currentPlayer,
+      currentPlayer: currentPlayerRef.current,
       dice,
       lastRoll,
       hasRolled,
       isRolling,
       rollingValue,
-      currentTurnColor,
+      currentTurnColor: currentTurnColorRef.current,
       moveMode,
       selectedMove,
       message,
@@ -498,7 +498,7 @@ function App() {
       showElimination,
       capturedInfo,
       captureCredits,
-      gameOver,
+      gameOver: gameOverRef.current,
     }
   }
 
@@ -1320,7 +1320,9 @@ function createHostPeer(maxAttempts = 5) {
     }
     const botByColor = {}
     const names = { ...playerNames }
-    setPlayers(createPlayers(colorsForGame, names, botByColor))
+    const freshPlayers = createPlayers(colorsForGame, names, botByColor)
+    playersRef.current = freshPlayers
+    setPlayers(freshPlayers)
     setPhase('playing')
     phaseRef.current = 'playing'
     currentPlayerRef.current = 0
@@ -1346,6 +1348,7 @@ function createHostPeer(maxAttempts = 5) {
     playSfx('start')
     sendImmediateP2pState({
       phase: 'playing',
+      players: freshPlayers,
       currentPlayer: 0,
       currentTurnColor: colorsForGame[0],
       dice: null,
@@ -1488,7 +1491,9 @@ function createHostPeer(maxAttempts = 5) {
   function resetGame() {
     if (isAnimating) return
     const colors = activeColors.length >= 2 ? activeColors : COLOR_ORDER
-    setPlayers(createPlayers(colors, playerNames))
+    const freshPlayers = createPlayers(colors, playerNames)
+    playersRef.current = freshPlayers
+    setPlayers(freshPlayers)
     currentPlayerRef.current = 0
     setCurrentPlayer(0)
     setDice(null)
@@ -1510,6 +1515,7 @@ function createHostPeer(maxAttempts = 5) {
     setSelectedMove(null)
     sendImmediateP2pState({
       phase: 'setup',
+      players: freshPlayers,
       currentPlayer: 0,
       currentTurnColor: colors[0],
       dice: null,
