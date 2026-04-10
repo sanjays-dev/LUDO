@@ -1172,7 +1172,8 @@ function createHostPeer(maxAttempts = 5) {
   }, [players])
 
   const movableTokenIds = useMemo(() => {
-    if (phase !== 'playing' || !hasRolled || gameOver || isAnimating) return new Set()
+    const hasPendingRollValue = (lastRoll ?? dice) !== null
+    if (phase !== 'playing' || (!hasRolled && !hasPendingRollValue) || gameOver || isAnimating) return new Set()
     const activeTurnColor = currentTurnColor || players[currentPlayer]?.color || null
     const activeTurnIndex =
       players.findIndex((p) => p.color === activeTurnColor) >= 0
@@ -1404,7 +1405,9 @@ function createHostPeer(maxAttempts = 5) {
         if (!actorColor || currentTurn.id !== actorColor) return
       }
     }
-    if (phase !== 'playing' || hasRolled || gameOver || isAnimating || isRolling)
+    const hasPendingRollValue = (lastRoll ?? dice) !== null
+    const turnRollLocked = hasRolled && (isRolling || hasPendingRollValue)
+    if (phase !== 'playing' || turnRollLocked || gameOver || isAnimating || isRolling)
       return
     const value = Math.floor(Math.random() * 6) + 1
     setHasRolled(true)
@@ -1603,7 +1606,8 @@ function createHostPeer(maxAttempts = 5) {
         if (!actorColor || currentTurn.id !== actorColor) return
       }
     }
-    if (phase !== 'playing' || !hasRolled || gameOver || !movableTokenIds.has(tokenId))
+    const hasPendingRollValue = (lastRoll ?? dice) !== null
+    if (phase !== 'playing' || (!hasRolled && !hasPendingRollValue) || gameOver || !movableTokenIds.has(tokenId))
       return
     if (animatingRef.current || isAnimating) return
 
@@ -1784,6 +1788,8 @@ function createHostPeer(maxAttempts = 5) {
       : Boolean(myOnlineColor && activeTurnColorForUi && myOnlineColor === activeTurnColorForUi)
   const canRollInCurrentContext =
     playMode !== 'p2p' || !isP2pConnected ? true : isOnlineTurnMine
+  const hasPendingRollValue = (lastRoll ?? dice) !== null
+  const turnRollLocked = hasRolled && (isRolling || hasPendingRollValue)
   const isTwoPlayer = phase === 'playing' && players.length === 2
 
   return (
@@ -2352,7 +2358,7 @@ function createHostPeer(maxAttempts = 5) {
                       onClick={rollDice}
                       disabled={
                         phase !== 'playing' ||
-                        hasRolled ||
+                        turnRollLocked ||
                         gameOver ||
                         !canRollInCurrentContext ||
                         isAnimating ||
@@ -2373,7 +2379,7 @@ function createHostPeer(maxAttempts = 5) {
                     onClick={rollDice}
                     disabled={
                       phase !== 'playing' ||
-                      hasRolled ||
+                      turnRollLocked ||
                       gameOver ||
                       !canRollInCurrentContext ||
                       isAnimating ||
