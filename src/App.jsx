@@ -1660,7 +1660,8 @@ function createHostPeer(maxAttempts = 5) {
       }
     })
   }, [playerCount, playerNames, myName, lobbyVersion])
-  const current = players[currentPlayer]
+  const currentTurnIndex = currentPlayerRef.current
+  const current = playersRef.current[currentTurnIndex] || players[currentPlayer]
   const isMyColor = (color) => Boolean(playMode === 'p2p' && myOnlineColor && color === myOnlineColor)
   const isOnlineTurnMine =
     playMode !== 'p2p' || !current ? true : Boolean(myOnlineColor && current.id === myOnlineColor)
