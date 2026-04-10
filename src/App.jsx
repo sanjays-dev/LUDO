@@ -586,6 +586,12 @@ function App() {
     if (typeof next.currentTurnColor === 'string') {
       currentTurnColorRef.current = next.currentTurnColor
       setCurrentTurnColor(next.currentTurnColor)
+    } else if (typeof next.currentPlayer === 'number' && Array.isArray(next.players)) {
+      const fallbackTurnColor = next.players[next.currentPlayer]?.color || null
+      if (fallbackTurnColor) {
+        currentTurnColorRef.current = fallbackTurnColor
+        setCurrentTurnColor(fallbackTurnColor)
+      }
     }
     if (typeof next.moveMode === 'string') {
       // Roll mode is the only supported move mode in this UI.
@@ -1294,6 +1300,10 @@ function createHostPeer(maxAttempts = 5) {
 
   function startGame() {
     let colorsForGame = [...activeColors]
+    if (playerCount === 2) {
+      colorsForGame = [P2P_HOST_COLOR, P2P_GUEST_COLOR]
+      setSelectedColors(colorsForGame)
+    }
     if (playMode === 'p2p') {
       if (!isHost) {
         toast.info('Waiting for host to start the game.')
@@ -1767,8 +1777,11 @@ function createHostPeer(maxAttempts = 5) {
     playersRef.current[currentTurnIndex] ||
     players[currentPlayer]
   const isMyColor = (color) => Boolean(playMode === 'p2p' && myOnlineColor && color === myOnlineColor)
+  const activeTurnColorForUi = currentTurnColorRef.current || current?.color || null
   const isOnlineTurnMine =
-    playMode !== 'p2p' || !current ? true : Boolean(myOnlineColor && current.id === myOnlineColor)
+    playMode !== 'p2p'
+      ? true
+      : Boolean(myOnlineColor && activeTurnColorForUi && myOnlineColor === activeTurnColorForUi)
   const canRollInCurrentContext =
     playMode !== 'p2p' || !isP2pConnected ? true : isOnlineTurnMine
   const isTwoPlayer = phase === 'playing' && players.length === 2
