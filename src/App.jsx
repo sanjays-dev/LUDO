@@ -548,7 +548,10 @@ function App() {
       playersRef.current = next.players
       setPlayers(next.players)
     }
-    if (typeof next.currentPlayer === 'number') setCurrentPlayer(next.currentPlayer)
+    if (typeof next.currentPlayer === 'number') {
+      currentPlayerRef.current = next.currentPlayer
+      setCurrentPlayer(next.currentPlayer)
+    }
     if (typeof next.dice !== 'undefined') setDice(next.dice)
     if (typeof next.lastRoll !== 'undefined') setLastRoll(next.lastRoll)
     if (typeof next.hasRolled === 'boolean') setHasRolled(next.hasRolled)
@@ -1404,6 +1407,7 @@ function createHostPeer(maxAttempts = 5) {
       if (guard > total) break
     } while (playersState[next].tokens.every((t) => t.steps === 58))
 
+    currentPlayerRef.current = next
     setCurrentPlayer(next)
     scheduleDiceClear()
     setLastRoll(null)
@@ -1726,8 +1730,21 @@ function createHostPeer(maxAttempts = 5) {
             {setupStep === 'entry' ? (
               <>
                 <div className="entry-hero">
-                  <div className="entry-hero-icon" aria-hidden="true">
-                    {'🎲'}
+                  <div className="entry-ludo-stage" aria-hidden="true">
+                    <div className="entry-ludo-ring" />
+                    <div className="entry-ludo-center" />
+                    <div className="entry-ludo-token green" />
+                    <div className="entry-ludo-token yellow" />
+                    <div className="entry-ludo-token blue" />
+                    <div className="entry-ludo-token red" />
+                    <div className="entry-ludo-dice">
+                      <span className="pip p1" />
+                      <span className="pip p2" />
+                      <span className="pip p3" />
+                      <span className="pip p4" />
+                      <span className="pip p5" />
+                      <span className="pip p6" />
+                    </div>
                   </div>
                 </div>
                 <h1>Enter Ludo</h1>
@@ -2052,7 +2069,7 @@ function createHostPeer(maxAttempts = 5) {
                     }
                   >
                     {playMode === 'p2p' && !isHost
-                      ? 'Waiting for host…'
+                      ? 'Waiting for host...'
                       : playMode === 'p2p' && hostConnectedGuests < playerCount - 1
                         ? `Need ${playerCount - 1} guests`
                         : 'Continue'}
