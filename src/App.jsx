@@ -1167,13 +1167,19 @@ function createHostPeer(maxAttempts = 5) {
 
   const movableTokenIds = useMemo(() => {
     if (phase !== 'playing' || !hasRolled || gameOver || isAnimating) return new Set()
-    const player = players[currentPlayer]
+    const activeTurnColor = currentTurnColor || players[currentPlayer]?.color || null
+    const activeTurnIndex =
+      players.findIndex((p) => p.color === activeTurnColor) >= 0
+        ? players.findIndex((p) => p.color === activeTurnColor)
+        : currentPlayer
+    const player = players[activeTurnIndex]
+    if (!player) return new Set()
     const rollValue = lastRoll ?? dice
     if (!rollValue) return new Set()
     const hasCapture = Boolean(captureCredits[player.id])
     const enemyTrackIndices = new Set()
     players.forEach((p, idx) => {
-      if (idx === currentPlayer) return
+      if (idx === activeTurnIndex) return
       p.tokens.forEach((t) => {
         if (t.steps >= 0 && t.steps < 52) {
           enemyTrackIndices.add(getTrackIndex(p.color, t.steps))
@@ -1198,7 +1204,7 @@ function createHostPeer(maxAttempts = 5) {
       }
     })
     return result
-  }, [players, currentPlayer, hasRolled, dice, lastRoll, captureCredits, gameOver, phase, isAnimating])
+  }, [players, currentPlayer, currentTurnColor, hasRolled, dice, lastRoll, captureCredits, gameOver, phase, isAnimating])
 
   function toggleColor(color) {
     if (phase !== 'setup') return
